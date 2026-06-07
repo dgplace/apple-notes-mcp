@@ -1,0 +1,58 @@
+{
+  "name": "apple-notes-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Apple Notes (macOS, via JXA/osascript)",
+  "type": "module",
+  "license": "MIT",
+  "author": "Simanta Deb Turja",
+  "homepage": "https://github.com/simantaturja/apple-notes-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/simantaturja/apple-notes-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/simantaturja/apple-notes-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "apple-notes",
+    "notes",
+    "macos",
+    "jxa",
+    "osascript",
+    "claude"
+  ],
+  "bin": {
+    "apple-notes-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build && npm test",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:integration": "npm run build && APPLE_NOTES_IT=1 node --import tsx --test test/integration.test.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
