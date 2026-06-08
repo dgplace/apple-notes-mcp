@@ -10,20 +10,14 @@ It talks to Notes.app via JXA (JavaScript for Automation) through `osascript` â€
 - Node.js >= 18
 - Apple Notes.app
 
-## Installation
-
-```bash
-git clone https://github.com/simantaturja/apple-notes-mcp.git
-cd apple-notes-mcp
-npm install   # builds automatically via the `prepare` hook
-```
-
 ## Setup
+
+No clone, no build. Your MCP client downloads and runs the server on demand via `npx`.
 
 ### Claude Code
 
 ```bash
-claude mcp add apple-notes -- node /absolute/path/to/apple-notes-mcp/dist/index.js
+claude mcp add apple-notes -- npx -y @simantaturja/apple-notes-mcp
 ```
 
 ### Claude Desktop
@@ -34,11 +28,29 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "apple-notes": {
-      "command": "node",
-      "args": ["/absolute/path/to/apple-notes-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@simantaturja/apple-notes-mcp"]
     }
   }
 }
+```
+
+Restart your client. The first call pulls the package from npm (cached afterward) â€” see [Automation permission](#automation-permission) for the one-time macOS prompt.
+
+### Install from source
+
+For development or to run a local build instead of the published package:
+
+```bash
+git clone https://github.com/simantaturja/apple-notes-mcp.git
+cd apple-notes-mcp
+npm install   # builds automatically via the `prepare` hook
+```
+
+Then point your client at the built entry, e.g. for Claude Code:
+
+```bash
+claude mcp add apple-notes -- node /absolute/path/to/apple-notes-mcp/dist/index.js
 ```
 
 ### Environment variables
@@ -53,8 +65,8 @@ Set it in your MCP client config, e.g. for Claude Desktop:
 {
   "mcpServers": {
     "apple-notes": {
-      "command": "node",
-      "args": ["/absolute/path/to/apple-notes-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@simantaturja/apple-notes-mcp"],
       "env": { "APPLE_NOTES_TRASH_FOLDER": "Nylig slettet" }
     }
   }
