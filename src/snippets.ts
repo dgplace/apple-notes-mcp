@@ -15,6 +15,61 @@ export const JXA_HTML_HELPERS = `
           .join("");
 `;
 
+// Mutate one already-resolved note while preserving its existing HTML for
+// append operations and refusing destructive whole-body rewrites by default.
+// Kept as plain JavaScript so the behavior can be exercised with mock Notes
+// objects in Node without Automation permission.
+export const JXA_UPDATE_NOTE = `
+  function richContentKinds(note, html) {
+    const kinds = [];
+    const attachments = note.attachments;
+    const attachmentCount = attachments.length;
+    const attachmentNames = attachmentCount > 0 ? attachments.name() : [];
+
+    const hasAttachmentMarkup =
+      /<(?:object|img|attachment)\\b/i.test(html) ||
+      /Apple-string-attachment|data-attachment(?:-identifier)?/i.test(html);
+    const hasDrawingMarkup =
+      /<[^>]*(?:drawing|sketch|pkdrawing|com\\.apple\\.(?:notes\\.)?drawing)[^>]*>/i.test(html);
+    const hasDrawingName = attachmentNames.some(name =>
+      /(?:drawing|sketch)/i.test(String(name))
+    );
+
+    if (attachmentCount > 0 || hasAttachmentMarkup) kinds.push("attachment");
+    if (hasDrawingMarkup || hasDrawingName) kinds.push("drawing");
+    if (/<table(?:\\s|>)/i.test(html)) kinds.push("table");
+    if (
+      /<input\\b[^>]*type\\s*=\\s*["']?checkbox/i.test(html) ||
+      /(?:Apple-dash-list|com-apple-note-checklist|data-checked|class\\s*=\\s*["'][^"']*checklist)/i.test(html)
+    ) kinds.push("checklist");
+
+    return kinds;
+  }
+
+  function updateNoteContent(note, body, mode, newTitle, allowRichContentLoss) {
+    const existingBody = note.body();
+
+    if (mode === "append") {
+      // Keep the complete Notes-supplied HTML, including embedded-object
+      // references, and add only the requested suffix.
+      note.body = existingBody + toHtml(body);
+      return;
+    }
+
+    const kinds = richContentKinds(note, existingBody);
+    if (kinds.length > 0 && !allowRichContentLoss) {
+      throw new Error(
+        "Refusing to replace a note containing rich content (" + kinds.join(", ") +
+        "). Replacing the whole body would discard those items. Back up the note, " +
+        "then retry with allow_rich_content_loss: true only if that loss is intended."
+      );
+    }
+
+    const heading = newTitle !== "" ? newTitle : note.name();
+    note.body = "<div><h1>" + escapeHtml(heading) + "</h1></div>" + toHtml(body);
+  }
+`;
+
 export const JXA_RESOLVE_NOTE = `
   function resolveNote(Notes, id, title) {
     if (id !== "") {

@@ -39,11 +39,11 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** Editing a note cannot silently delete its attachments. `src/tools/write.ts:101` rebuilds the body as `"<h1>" + title + "</h1>" + toHtml(body)` in `replace` mode, discarding attachments, drawings, scans, tables, checklists, and audio. This is the highest-severity live defect: a documented, advertised tool destroys user content on ordinary use.
 
-- [ ] Detect rich content on the target note before any whole-body rewrite.
-- [ ] Reject `mode: "replace"` on notes carrying rich content by default, with an actionable message naming what would be lost.
-- [ ] Gate the override behind an explicit per-call field, not a server-wide flag.
-- [ ] Ensure `mode: "append"` concatenates onto the existing body without rebuilding it (verify the current `note.body() + toHtml(body)` path preserves attachments).
-- [ ] Preserve the existing title when `new_title` is absent.
+- [x] Detect rich content on the target note before any whole-body rewrite.
+- [x] Reject `mode: "replace"` on notes carrying rich content by default, with an actionable message naming what would be lost.
+- [x] Gate the override behind an explicit per-call field, not a server-wide flag.
+- [x] Ensure `mode: "append"` concatenates onto the existing body without rebuilding it (verify the current `note.body() + toHtml(body)` path preserves attachments).
+- [x] Preserve the existing title when `new_title` is absent.
 
 **Acceptance criteria:**
 

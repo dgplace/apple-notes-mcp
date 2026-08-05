@@ -1,7 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { runJxa } from "../jxa.js";
-import { JXA_HTML_HELPERS, JXA_RESOLVE_NOTE } from "../snippets.js";
+import {
+  JXA_HTML_HELPERS,
+  JXA_RESOLVE_NOTE,
+  JXA_UPDATE_NOTE,
+} from "../snippets.js";
 import { ok, fail } from "../helpers.js";
 
 export function registerWriteTools(server: McpServer): void {
@@ -77,9 +81,15 @@ export function registerWriteTools(server: McpServer): void {
           .string()
           .optional()
           .describe("Rename the note (replace mode only)"),
+        allow_rich_content_loss: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Allow replace to discard attachments and other rich content (per-call, default false)"
+          ),
       },
     },
-    async ({ id, title, body, mode, new_title }) => {
+    async ({ id, title, body, mode, new_title, allow_rich_content_loss }) => {
       if (!id && !title) {
         return fail(new Error("Provide either 'id' or 'title'."));
       }
@@ -87,19 +97,16 @@ export function registerWriteTools(server: McpServer): void {
         const updated = await runJxa<{ id: string; name: string; modified: string }>(
           `${JXA_HTML_HELPERS}
           ${JXA_RESOLVE_NOTE}
+          ${JXA_UPDATE_NOTE}
           function run(argv) {
             const Notes = Application("Notes");
             const note = resolveNote(Notes, argv[0], argv[1]);
             const body = argv[2];
             const mode = argv[3];
             const newTitle = argv[4];
+            const allowRichContentLoss = argv[5] === "true";
 
-            if (mode === "append") {
-              note.body = note.body() + toHtml(body);
-            } else {
-              const heading = newTitle !== "" ? newTitle : note.name();
-              note.body = "<div><h1>" + escapeHtml(heading) + "</h1></div>" + toHtml(body);
-            }
+            updateNoteContent(note, body, mode, newTitle, allowRichContentLoss);
 
             return JSON.stringify({
               id: note.id(),
@@ -107,7 +114,14 @@ export function registerWriteTools(server: McpServer): void {
               modified: note.modificationDate().toISOString().slice(0, 19) + "Z",
             });
           }`,
-          [id ?? "", title ?? "", body, mode, new_title ?? ""]
+          [
+            id ?? "",
+            title ?? "",
+            body,
+            mode,
+            new_title ?? "",
+            String(allow_rich_content_loss),
+          ]
         );
         return ok(updated);
       } catch (e) {
