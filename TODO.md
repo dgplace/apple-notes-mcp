@@ -71,12 +71,12 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 > **Breaking change.** Defaulting to read-only removes write tools from every existing installation of `@simantaturja/apple-notes-mcp`, which the README currently advertises. Ship as a major version bump with a migration note in `CHANGELOG.md` and README telling existing users which variable restores write access.
 
-- [ ] Add `APPLE_NOTES_MODE=read-only|read-write`, defaulting to `read-only`.
-- [ ] In read-only mode, do not advertise create, update, append, move, or delete tools.
-- [ ] Fail closed for missing, invalid, or contradictory security configuration.
-- [ ] Return server instructions explaining privacy, approval, and recoverability boundaries.
-- [ ] Document a Codex configuration that allowlists read tools and requires approval for every write tool.
-- [ ] Bump to 2.0.0 and document the upgrade path for existing users.
+- [x] Add `APPLE_NOTES_MODE=read-only|read-write`, defaulting to `read-only`.
+- [x] In read-only mode, do not advertise create, update, append, move, or delete tools.
+- [x] Fail closed for missing, invalid, or contradictory security configuration.
+- [x] Return server instructions explaining privacy, approval, and recoverability boundaries.
+- [x] Document a Codex configuration that allowlists read tools and requires approval for every write tool.
+- [x] Bump to 2.0.0 and document the upgrade path for existing users.
 
 **Acceptance criteria:**
 

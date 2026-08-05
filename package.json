@@ -1,6 +1,6 @@
 {
   "name": "@simantaturja/apple-notes-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "MCP server for Apple Notes (macOS, via JXA/osascript)",
   "type": "module",
   "license": "MIT",
@@ -41,7 +41,7 @@
     "prepare": "npm run build",
     "prepublishOnly": "npm run build && npm test",
     "test": "node --import tsx --test test/*.test.ts",
-    "test:integration": "npm run build && APPLE_NOTES_IT=1 node --import tsx --test test/integration.test.ts"
+    "test:integration": "npm run build && APPLE_NOTES_IT=1 APPLE_NOTES_MODE=read-write node --import tsx --test test/integration.test.ts"
   },
   "engines": {
     "node": ">=18"

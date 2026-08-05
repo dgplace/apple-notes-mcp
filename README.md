@@ -11,6 +11,15 @@ Published on npm as [`@simantaturja/apple-notes-mcp`](https://www.npmjs.com/pack
 
 It talks to Notes.app via JXA (JavaScript for Automation) through `osascript` — no private APIs, no database hacks, and it works with iCloud-synced notes.
 
+> [!IMPORTANT]
+> **2.0.0 is a breaking, security-first release.** The server now defaults to
+> read-only and exposes only `list_folders`, `list_notes`, `search_notes`, and
+> `get_note` unless
+> `APPLE_NOTES_MODE=read-write` is set explicitly. Existing 1.x users who need
+> the previous tool surface must add that exact environment variable to their
+> MCP server configuration. Client approval rules are still required: enabling
+> write mode is capability, not approval for a particular mutation.
+
 ## Requirements
 
 - macOS (tested on macOS 14+)
@@ -20,12 +29,55 @@ It talks to Notes.app via JXA (JavaScript for Automation) through `osascript` �
 ## Setup
 
 No clone, no build. Your MCP client downloads and runs the server on demand via `npx`.
+Start read-only, verify what the four read tools expose, and enable writes only
+if you need them.
+
+### Codex (recommended: read-only)
+
+Add this to `~/.codex/config.toml`. The server enforces read-only mode and Codex
+also allowlists only the four read tools:
+
+```toml
+[mcp_servers.apple-notes]
+command = "npx"
+args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
+env = { APPLE_NOTES_MODE = "read-only" }
+enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note"]
+default_tools_approval_mode = "auto"
+```
+
+If writes are required, use this configuration instead. Reads remain automatic,
+while every currently available mutation receives an explicit Codex prompt:
+
+```toml
+[mcp_servers.apple-notes]
+command = "npx"
+args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
+env = { APPLE_NOTES_MODE = "read-write" }
+enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "delete_note"]
+default_tools_approval_mode = "auto"
+
+[mcp_servers.apple-notes.tools.create_note]
+approval_mode = "prompt"
+
+[mcp_servers.apple-notes.tools.update_note]
+approval_mode = "prompt"
+
+[mcp_servers.apple-notes.tools.delete_note]
+approval_mode = "prompt"
+```
+
+`enabled_tools` is an allowlist. The per-tool `approval_mode = "prompt"`
+settings override the automatic default for mutations, so each write requires a
+separate decision without prompting unnecessarily for reads.
 
 ### Claude Code
 
 ```bash
-claude mcp add apple-notes -- npx -y @simantaturja/apple-notes-mcp
+claude mcp add apple-notes -- npx -y @simantaturja/apple-notes-mcp@2.0.0
 ```
+
+With no `APPLE_NOTES_MODE` setting this starts securely in read-only mode.
 
 ### Claude Desktop
 
@@ -36,7 +88,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "apple-notes": {
       "command": "npx",
-      "args": ["-y", "@simantaturja/apple-notes-mcp"]
+      "args": ["-y", "@simantaturja/apple-notes-mcp@2.0.0"],
+      "env": { "APPLE_NOTES_MODE": "read-only" }
     }
   }
 }
@@ -64,6 +117,7 @@ claude mcp add apple-notes -- node /absolute/path/to/apple-notes-mcp/dist/index.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `APPLE_NOTES_MODE` | `read-only` | Server-enforced capability mode. The only accepted values are exactly `read-only` and `read-write`; any other present value prevents startup. |
 | `APPLE_NOTES_TRASH_FOLDER` | `Recently Deleted` | Name of the special trash folder. macOS localizes this name; set it to your locale's name (e.g. `Nylig slettet` on Norwegian) so deleted notes are correctly excluded from `list_notes`/`search_notes`. |
 
 Set it in your MCP client config, e.g. for Claude Desktop:
@@ -73,8 +127,11 @@ Set it in your MCP client config, e.g. for Claude Desktop:
   "mcpServers": {
     "apple-notes": {
       "command": "npx",
-      "args": ["-y", "@simantaturja/apple-notes-mcp"],
-      "env": { "APPLE_NOTES_TRASH_FOLDER": "Nylig slettet" }
+      "args": ["-y", "@simantaturja/apple-notes-mcp@2.0.0"],
+      "env": {
+        "APPLE_NOTES_MODE": "read-only",
+        "APPLE_NOTES_TRASH_FOLDER": "Nylig slettet"
+      }
     }
   }
 }
@@ -89,17 +146,31 @@ The first time a tool runs, macOS will prompt:
 Click **Allow**. If you accidentally denied it, re-enable under
 **System Settings → Privacy & Security → Automation**.
 
+### Migrating from 1.x
+
+1.x always registered write tools. To restore that capability after upgrading,
+set this exact server environment variable:
+
+```text
+APPLE_NOTES_MODE=read-write
+```
+
+For example, a JSON-based MCP configuration uses
+`"env": { "APPLE_NOTES_MODE": "read-write" }`. Also configure the client to
+prompt separately for `create_note`, `update_note`, and `delete_note`; server
+write mode alone does not express user intent for an individual operation.
+
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `list_folders` | List all folders with note counts |
-| `list_notes` | List notes (most recently modified first), optionally filtered by folder. Params: `folder?`, `limit` (1–200, default 25) |
-| `search_notes` | Case-insensitive search in note titles and bodies. Params: `query`, `limit` (1–100, default 20), `scope` (`all`\|`title`, default all) |
-| `get_note` | Read a note's content by `id` (short or full, preferred) or exact `title`. Param `max_chars` (default 10000) truncates long bodies |
-| `create_note` | Create a note. Params: `title`, `body` (plain text or HTML), `folder?` |
-| `update_note` | Replace or append to a note's body, optionally rename. Params: `id`/`title`, `body`, `mode` (`replace`\|`append`, default replace), `new_title?` |
-| `delete_note` | Delete a note (moved to Recently Deleted, recoverable ~30 days). Params: `id`/`title` |
+| Tool | Mode | Description |
+|------|------|-------------|
+| `list_folders` | read-only, read-write | List all folders with note counts |
+| `list_notes` | read-only, read-write | List notes (most recently modified first), optionally filtered by folder. Params: `folder?`, `limit` (1–200, default 25) |
+| `search_notes` | read-only, read-write | Case-insensitive search in note titles and bodies. Params: `query`, `limit` (1–100, default 20), `scope` (`all`\|`title`, default all) |
+| `get_note` | read-only, read-write | Read a note's content by `id` (short or full, preferred) or exact `title`. Param `max_chars` (default 10000) truncates long bodies |
+| `create_note` | read-write | Create a note. Params: `title`, `body` (plain text or HTML), `folder?` |
+| `update_note` | read-write | Replace or append to a note's body, optionally rename. Params: `id`/`title`, `body`, `mode` (`replace`\|`append`, default replace), `new_title?`, `allow_rich_content_loss` (default false) |
+| `delete_note` | read-write | Ask Notes to move an ordinary note to Recently Deleted. Params: `id`/`title` |
 
 ### Example prompts
 
@@ -129,6 +200,7 @@ npm start      # run the built server (stdio transport)
 ```
 src/
   index.ts          entry point — wires transport, registers tools
+  server.ts         security-mode parser, instructions, tool policy
   jxa.ts            runs JXA scripts via osascript (argv-safe)
   snippets.ts       shared JXA code (HTML escaping, note resolution, folder map)
   helpers.ts        result wrappers, id-prefix factoring, body truncation
@@ -146,30 +218,45 @@ npm test               # fast unit tests — no Notes.app, no permissions needed
 npm run test:integration   # full lifecycle against real Notes.app (creates + deletes a test note)
 ```
 
-Unit tests run pure logic — id factoring, body truncation, the JXA HTML/resolver
-snippets (evaluated directly in Node), and cache invalidation with an injected
-fetcher — so they need no macOS automation permission and run in ~250 ms.
+Unit tests cover pure logic — id factoring, body truncation, JXA snippets
+evaluated directly in Node, and cache invalidation — plus stdio policy tests
+against a fake `osascript`. They need neither Notes.app access nor macOS
+Automation permission.
 
 The integration test drives the built server over real JSON-RPC and exercises
 create → search → update → get → delete. It is opt-in (gated on `APPLE_NOTES_IT=1`,
-set by the script) because it touches your real Notes library; the test note it
+with `APPLE_NOTES_MODE=read-write` set by the script) because it touches your real Notes library; the test note it
 creates is deleted (moved to Recently Deleted) at the end.
 
 You can also smoke-test by piping JSON-RPC to the server:
 
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node dist/index.js
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-test","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  | node dist/index.js
 ```
 
 ## Security
 
+- The server is read-only by default. In that mode write handlers are not
+  registered, so stale direct `tools/call` requests are rejected before JXA can run.
 - User input is passed to JXA via `argv`, never interpolated into the script — no script injection.
 - Scripts run through `execFile` (no shell), with a 120s timeout and bounded output buffer.
 - Note titles and plain-text bodies are HTML-escaped before being written to Notes.
-- `delete_note` moves notes to Recently Deleted (recoverable for ~30 days) — it never permanently erases.
+- Replacing detected attachment, drawing, table, or checklist content is rejected
+  unless `allow_rich_content_loss=true` is supplied for that individual call.
+- `delete_note` refuses notes already in Recently Deleted. For ordinary notes it
+  asks Notes to move the note there, but recovery is not guaranteed for every
+  account type or shared-note case.
 - Title-based update/delete refuses to act when multiple notes share the title (use `id`).
 - Notes in Recently Deleted are excluded from `list_notes`/`search_notes` (pass `folder: "Recently Deleted"` to list them explicitly). Note: the folder is matched by name (default `Recently Deleted`); on a non-English macOS locale, set `APPLE_NOTES_TRASH_FOLDER` (see [Environment variables](#environment-variables)) so the exclusion applies.
-- Everything runs locally; no note content leaves your machine except through the MCP client you connect.
+- Locked notes may be rejected by Notes and shared-note writes are not yet
+  independently gated. Do not mutate either without understanding the account
+  and collaboration impact.
+- Notes access and automation run locally over stdio, but tool results are sent
+  to the connected MCP client and may then be sent to its model provider.
 
 ## Why it's fast
 
@@ -229,7 +316,7 @@ many thousands of large notes, an indexed/semantic-search server will answer the
 Tool schemas load into the model's context every session; tool results enter it on
 every call. Both are kept deliberately small:
 
-- **Lean schema** — 7 tools ≈ 1,050 tokens total (~150/tool). Feature-heavy servers
+- **Lean schema** — 4 tools by default (7 in read-write mode). Feature-heavy servers
   ship 15–20+ tools and several times that on every single session.
 - **Compact JSON** — no pretty-printing (~18% smaller).
 - **Factored id prefix** — note ids share a 55-char `x-coredata://UUID/ICNote/`

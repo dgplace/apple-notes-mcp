@@ -1,21 +1,13 @@
 #!/usr/bin/env node
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerReadTools } from "./tools/read.js";
-import { registerWriteTools } from "./tools/write.js";
-
-const server = new McpServer({
-  name: "apple-notes",
-  version: "1.0.0",
-});
-
-registerReadTools(server);
-registerWriteTools(server);
+import { createAppleNotesServer, parseAppleNotesMode } from "./server.js";
 
 async function main() {
+  const mode = parseAppleNotesMode(process.env.APPLE_NOTES_MODE);
+  const server = createAppleNotesServer(mode);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("apple-notes MCP server running on stdio");
+  console.error(`apple-notes MCP server running on stdio (${mode})`);
 
   const shutdown = async () => {
     try {
