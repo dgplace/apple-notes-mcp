@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { runJxa } from "../jxa.js";
+import { runJxa, type JxaRunner } from "../jxa.js";
 import {
   JXA_HTML_HELPERS,
   JXA_IDENTITY_HELPERS,
@@ -10,7 +10,7 @@ import {
 } from "../snippets.js";
 import { JXA_REVISION } from "../revision.js";
 import { ok, fail } from "../helpers.js";
-import { safeError } from "../errors.js";
+import { safeError, writeBoundaryError } from "../errors.js";
 import { parseTrashFolderIds, requireTrashFolderIds } from "../read-policy.js";
 import type { WritePolicy } from "../write-policy.js";
 import {
@@ -71,7 +71,11 @@ export function requireTrashConfirmation(value: unknown): asserts value is true 
   }
 }
 
-export function registerWriteTools(server: McpServer, policy: WritePolicy): void {
+export function registerWriteTools(
+  server: McpServer,
+  policy: WritePolicy,
+  jxaRunner: JxaRunner = runJxa
+): void {
   const trashFolderIds = parseTrashFolderIds(
     process.env.APPLE_NOTES_TRASH_FOLDER_IDS
   );
@@ -95,10 +99,12 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
       },
     },
     async ({ title, body, content_format, folder_id, dry_run, allow_shared_note }) => {
+      let automationStarted = false;
       try {
         const content = prepareContent(body, content_format, policy.allowRawHtml);
         requireTrashFolderIds(trashFolderIds);
-        const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
+        automationStarted = true;
+        const result = await jxaRunner<VerifiedWriteResult | object>(`${scriptPreamble}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
@@ -163,7 +169,13 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
         ]);
         return ok(result);
       } catch (error) {
-        return fail(error);
+        return fail(writeBoundaryError(error, {
+          automationStarted,
+          dryRun: dry_run,
+          operation: "create",
+          folderId: folder_id,
+          title,
+        }));
       }
     }
   );
@@ -198,10 +210,12 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
       allow_shared_note,
       dry_run,
     }) => {
+      let automationStarted = false;
       try {
         const content = prepareContent(body, content_format, policy.allowRawHtml);
         requireTrashFolderIds(trashFolderIds);
-        const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
+        automationStarted = true;
+        const result = await jxaRunner<VerifiedWriteResult | object>(`${scriptPreamble}
           ${JXA_UPDATE_NOTE}
           function run(argv) {
             return runSafely(() => {
@@ -276,7 +290,12 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
         ]);
         return ok(result);
       } catch (error) {
-        return fail(error);
+        return fail(writeBoundaryError(error, {
+          automationStarted,
+          dryRun: dry_run,
+          operation: mode,
+          noteId: id,
+        }));
       }
     }
   );
@@ -295,9 +314,11 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
       },
     },
     async ({ id, folder_id, expected_revision, allow_shared_note, dry_run }) => {
+      let automationStarted = false;
       try {
         requireTrashFolderIds(trashFolderIds);
-        const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
+        automationStarted = true;
+        const result = await jxaRunner<VerifiedWriteResult | object>(`${scriptPreamble}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
@@ -352,7 +373,12 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
         ]);
         return ok(result);
       } catch (error) {
-        return fail(error);
+        return fail(writeBoundaryError(error, {
+          automationStarted,
+          dryRun: dry_run,
+          operation: "move",
+          noteId: id,
+        }));
       }
     }
   );
@@ -383,12 +409,14 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
       confirm_shared_impact,
       dry_run,
     }) => {
+      let automationStarted = false;
       try {
         // This check is intentionally independent of the schema boundary so
         // direct/internal invocation cannot launch JXA without confirmation.
         requireTrashConfirmation(confirm);
         requireTrashFolderIds(trashFolderIds);
-        const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
+        automationStarted = true;
+        const result = await jxaRunner<VerifiedWriteResult | object>(`${scriptPreamble}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
@@ -467,7 +495,12 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
         ]);
         return ok(result);
       } catch (error) {
-        return fail(error);
+        return fail(writeBoundaryError(error, {
+          automationStarted,
+          dryRun: dry_run,
+          operation: "trash",
+          noteId: id,
+        }));
       }
     }
   );

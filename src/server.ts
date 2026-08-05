@@ -1,9 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createRequire } from "node:module";
+import { runJxa, type JxaRunner } from "./jxa.js";
 import { registerReadTools } from "./tools/read.js";
 import { registerWriteTools } from "./tools/write.js";
 import type { WritePolicy } from "./write-policy.js";
 
-export const SERVER_VERSION = "2.0.0";
+const packageMetadata = createRequire(import.meta.url)("../package.json") as {
+  version?: unknown;
+};
+if (typeof packageMetadata.version !== "string") {
+  throw new Error("package.json has no valid version");
+}
+export const SERVER_VERSION = packageMetadata.version;
 
 export type AppleNotesMode = "read-only" | "read-write";
 
@@ -33,7 +41,8 @@ export function parseAppleNotesMode(value: string | undefined): AppleNotesMode {
 
 export function createAppleNotesServer(
   mode: AppleNotesMode,
-  writePolicy: WritePolicy = { allowSharedWrites: false, allowRawHtml: false }
+  writePolicy: WritePolicy = { allowSharedWrites: false, allowRawHtml: false },
+  jxaRunner: JxaRunner = runJxa
 ): McpServer {
   const server = new McpServer(
     {
@@ -43,8 +52,8 @@ export function createAppleNotesServer(
     { instructions: SERVER_INSTRUCTIONS }
   );
 
-  registerReadTools(server);
-  if (mode === "read-write") registerWriteTools(server, writePolicy);
+  registerReadTools(server, jxaRunner);
+  if (mode === "read-write") registerWriteTools(server, writePolicy, jxaRunner);
 
   return server;
 }

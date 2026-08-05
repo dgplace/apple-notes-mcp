@@ -7,7 +7,7 @@
 
 An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that lets AI assistants like Claude read, search, and create notes in **Apple Notes** on macOS.
 
-Published on npm as [`@simantaturja/apple-notes-mcp`](https://www.npmjs.com/package/@simantaturja/apple-notes-mcp) — no clone or build needed, your MCP client runs it via `npx`.
+Published on npm as [`@simantaturja/apple-notes-mcp`](https://www.npmjs.com/package/@simantaturja/apple-notes-mcp) — no clone or build needed, your MCP client runs the explicitly versioned package via `npx`.
 
 It talks to Notes.app via JXA (JavaScript for Automation) through `osascript` — no private APIs, no database hacks, and it works with iCloud-synced notes.
 
@@ -23,12 +23,14 @@ It talks to Notes.app via JXA (JavaScript for Automation) through `osascript` �
 ## Requirements
 
 - macOS (tested on macOS 14+)
-- Node.js >= 18
+- Node.js >= 18.14.1
 - Apple Notes.app
 
 ## Setup
 
-No clone, no build. Your MCP client downloads and runs the server on demand via `npx`.
+No clone, no build. Your MCP client downloads and runs the explicitly versioned
+server package on demand via `npx`. Do not omit the `@2.0.0` version in the
+examples: an unversioned package request can silently select a different release.
 Start read-only, verify what the four read tools expose, and enable writes only
 if you need them.
 
@@ -110,7 +112,8 @@ For development or to run a local build instead of the published package:
 ```bash
 git clone https://github.com/simantaturja/apple-notes-mcp.git
 cd apple-notes-mcp
-npm install   # builds automatically via the `prepare` hook
+npm ci --ignore-scripts  # install exactly package-lock.json; skips prepare
+npm run build            # mandatory: produces dist/ after scripts were disabled
 ```
 
 Then point your client at the built entry, e.g. for Claude Code:
@@ -315,7 +318,7 @@ npm start      # run the built server (stdio transport)
 src/
   index.ts          entry point — wires transport, registers tools
   server.ts         security-mode parser, instructions, tool policy
-  jxa.ts            runs JXA scripts via osascript (argv-safe)
+  jxa.ts            runs JXA via fixed /usr/bin/osascript with bounded process policy
   snippets.ts       shared JXA code (HTML escaping, note resolution, folder map)
   helpers.ts        result wrappers, id-prefix factoring, body truncation
   read-policy.ts    hard input/output bounds and pagination
@@ -334,9 +337,10 @@ APPLE_NOTES_TRASH_FOLDER_IDS='x-coredata://.../ICFolder/...' npm run test:integr
 ```
 
 Unit tests cover pure logic — id factoring, body truncation, JXA snippets
-evaluated directly in Node, and cache invalidation — plus stdio policy tests
-against a fake `osascript`. They need neither Notes.app access nor macOS
-Automation permission.
+evaluated directly in Node, cache invalidation, and the injected process seam.
+A non-Notes JXA test proves a manipulated `PATH` cannot replace
+`/usr/bin/osascript`. They need neither Notes.app access nor macOS Automation
+permission.
 
 The integration test drives the built server over real JSON-RPC and exercises
 create → search → update → get → trash. It is opt-in (gated on `APPLE_NOTES_IT=1`,
@@ -358,7 +362,15 @@ printf '%s\n' \
 - The server is read-only by default. In that mode write handlers are not
   registered, so stale direct `tools/call` requests are rejected before JXA can run.
 - User input is passed to JXA via `argv`, never interpolated into the script — no script injection.
-- Scripts run through `execFile` (no shell), with a 120s timeout and bounded output buffer.
+- Scripts run through the fixed `/usr/bin/osascript` executable using `execFile`
+  (no shell), a 30-second timeout, a 1 MiB stdout/stderr cap, and a minimal child
+  environment containing only `HOME`, `TMPDIR`, and a fixed UTF-8 locale. `PATH`,
+  dynamic-loader variables, Node options, MCP settings, and unrelated secrets
+  are not inherited.
+- If a non-dry write loses its bounded automation response, the server reports
+  `MUTATION_OUTCOME_UNKNOWN`: the change may already have occurred, so re-read
+  or list the stable target and do not retry blindly. A failed dry-run instead
+  states explicitly that its mutation branch did not run.
 - Note titles and plain-text bodies are HTML-escaped before being written to Notes.
 - There is no HTML auto-detection. Raw HTML is disabled by default, requires two
   explicit gates, and passes through a strict balanced no-attribute allowlist.
@@ -384,6 +396,8 @@ printf '%s\n' \
   server capability flag plus explicit per-call confirmation.
 - Notes access and automation run locally over stdio, but tool results are sent
   to the connected MCP client and may then be sent to its model provider.
+- Production dependency advisories are reviewed by installed path and reachable
+  surface rather than by a zero-count rule; see [DEPENDENCY_AUDIT.md](./DEPENDENCY_AUDIT.md).
 
 ## Why it's fast
 

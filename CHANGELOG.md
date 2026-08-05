@@ -23,6 +23,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shared mutation also requires `allow_shared_note=true` on that call.
 
 ### Security
+- JXA now launches only the absolute `/usr/bin/osascript` with a minimal child
+  environment, a 30-second timeout, and a 1 MiB output cap. Process failures
+  remain sanitized, while explicit safe domain errors are preserved.
+- A lost, invalid, timed-out, or oversized response to a mutation-capable call
+  now returns `MUTATION_OUTCOME_UNKNOWN` with stable-target and safe-retry
+  guidance; dry-run failures explicitly state that no mutation branch ran.
+- Runtime and development dependency declarations are exact; the reviewed
+  lockfile and dated dependency-advisory triage are recorded in
+  `DEPENDENCY_AUDIT.md`.
+- Node 18 support is guarded against transitive engine drift; the retained
+  unreachable HTTP advisory is documented instead of forcing an incompatible
+  Node-20-only dependency to obtain a zero audit count.
+- Clean installs use `npm ci --ignore-scripts` followed by an explicit mandatory
+  build, avoiding install-time lifecycle execution without omitting `dist`.
 - Removed body-prefix HTML auto-detection. Enabled raw HTML is parsed into a
   balanced, attribute-free Notes-compatible subset; scripts, remote resources,
   event handlers, links, media, tables/checklists, unsupported elements, and

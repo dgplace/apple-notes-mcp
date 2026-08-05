@@ -28,7 +28,9 @@
   },
   "files": [
     "dist",
+    "scripts/check-dependency-engines.mjs",
     "README.md",
+    "DEPENDENCY_AUDIT.md",
     "LICENSE"
   ],
   "publishConfig": {
@@ -41,21 +43,25 @@
     "prepare": "npm run build",
     "prepublishOnly": "npm run build && npm test",
     "test": "node --import tsx --test test/*.test.ts",
+    "check:dependency-engines": "node scripts/check-dependency-engines.mjs",
     "test:integration": "npm run build && APPLE_NOTES_IT=1 APPLE_NOTES_MODE=read-write node --import tsx --test test/integration.test.ts"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.14.1"
   },
   "os": [
     "darwin"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "zod": "^3.24.0"
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
-    "@types/node": "^22.19.20",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "@types/node": "22.19.20",
+    "tsx": "4.22.4",
+    "typescript": "5.9.3"
+  },
+  "overrides": {
+    "@hono/node-server": "1.19.17"
   }
 }

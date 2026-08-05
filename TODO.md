@@ -176,13 +176,13 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** Installation and runtime behaviour are pinned, inspectable, and resistant to path or dependency substitution. `runJxa` currently invokes `osascript` by relative name (`src/jxa.ts:11`), resolved through `PATH`.
 
-- [ ] Invoke `/usr/bin/osascript` by absolute path with a minimal environment.
-- [ ] Cap automation stdout/stderr and execution time at conservative values (currently 64 MB / 120 s).
-- [ ] Triage `npm audit` findings rather than requiring a zero count — see the release-gate note below.
-- [ ] Use `npm ci` for reproducible builds. Document that `--ignore-scripts` skips the `prepare` hook that produces `dist/`, so the explicit `npm run build` step is mandatory, not optional.
-- [ ] Pin release dependencies.
-- [ ] Avoid unversioned `npx` installation in security-sensitive documentation.
-- [ ] Derive the server version in `src/index.ts:9` from `package.json` instead of hardcoding it in two places.
+- [x] Invoke `/usr/bin/osascript` by absolute path with a minimal environment.
+- [x] Cap automation stdout/stderr and execution time at conservative values (currently 64 MB / 120 s).
+- [x] Triage `npm audit` findings rather than requiring a zero count — see the release-gate note below.
+- [x] Use `npm ci` for reproducible builds. Document that `--ignore-scripts` skips the `prepare` hook that produces `dist/`, so the explicit `npm run build` step is mandatory, not optional.
+- [x] Pin release dependencies.
+- [x] Avoid unversioned `npx` installation in security-sensitive documentation.
+- [x] Derive the server version in `src/index.ts:9` from `package.json` instead of hardcoding it in two places.
 
 **Acceptance criteria:**
 

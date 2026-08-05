@@ -1,13 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { access, chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
+  createAppleNotesServer,
   parseAppleNotesMode,
   SERVER_INSTRUCTIONS,
+  SERVER_VERSION,
 } from "../src/server.js";
+import {
+  runJxaProcess,
+  type JxaProcessExecutor,
+  type JxaRunner,
+} from "../src/jxa.js";
+import { SafeToolError } from "../src/errors.js";
 import {
   parseAllowRawHtml,
   parseAllowSharedWrites,
@@ -40,6 +49,52 @@ interface ServerProcess {
   stderr(): string;
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   stop(): Promise<void>;
+}
+
+async function withInjectedServer<T>(
+  mode: "read-only" | "read-write",
+  runner: JxaRunner,
+  operation: (client: Client) => Promise<T>,
+  options: {
+    allowRawHtml?: boolean;
+    allowSharedWrites?: boolean;
+    trashFolderIds?: string;
+  } = {}
+): Promise<T> {
+  const previousTrashIds = process.env.APPLE_NOTES_TRASH_FOLDER_IDS;
+  if (options.trashFolderIds === undefined) {
+    delete process.env.APPLE_NOTES_TRASH_FOLDER_IDS;
+  } else {
+    process.env.APPLE_NOTES_TRASH_FOLDER_IDS = options.trashFolderIds;
+  }
+
+  const server = createAppleNotesServer(
+    mode,
+    {
+      allowRawHtml: options.allowRawHtml ?? false,
+      allowSharedWrites: options.allowSharedWrites ?? false,
+    },
+    runner
+  );
+  const client = new Client({ name: "in-memory-policy-test", version: "0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    return await operation(client);
+  } finally {
+    await client.close();
+    await server.close();
+    if (previousTrashIds === undefined) delete process.env.APPLE_NOTES_TRASH_FOLDER_IDS;
+    else process.env.APPLE_NOTES_TRASH_FOLDER_IDS = previousTrashIds;
+  }
+}
+
+function toolText(result: { content?: unknown }): string {
+  const content = result.content;
+  if (!Array.isArray(content)) return "";
+  const first = content[0] as { type?: string; text?: string } | undefined;
+  return first?.type === "text" ? first.text ?? "" : "";
 }
 
 function startServer(
@@ -184,6 +239,21 @@ test("mode parser defaults only an absent setting to read-only", () => {
   assert.equal(parseAppleNotesMode("read-write"), "read-write");
 });
 
+test("initialize reports the package.json version without a hardcoded duplicate", async () => {
+  const packageJson = JSON.parse(
+    await readFile(join(process.cwd(), "package.json"), "utf8")
+  ) as { version: string };
+  assert.equal(SERVER_VERSION, packageJson.version);
+
+  const server = startServer("read-only");
+  try {
+    const response = await initialize(server);
+    assert.equal(response.result?.serverInfo?.version, packageJson.version);
+  } finally {
+    await server.stop();
+  }
+});
+
 test("mode parser rejects empty, malformed, padded, and case-mismatched values", () => {
   for (const value of ["", "write", " read-only", "read-write ", "READ-WRITE"]) {
     assert.throws(
@@ -269,69 +339,42 @@ test("mutation schemas require stable full folder/note ids and expose no name se
 });
 
 test("invalid mutation identifiers are rejected by schema before JXA can run", async () => {
-  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-identity-no-jxa-"));
-  const marker = join(fakeBin, "jxa-launched");
-  const fakeOsascript = join(fakeBin, "osascript");
-  await writeFile(
-    fakeOsascript,
-    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nexit 99\n'
-  );
-  await chmod(fakeOsascript, 0o755);
-
-  const server = startServer("read-write", {
-    PATH: fakeBin,
-    APPLE_NOTES_JXA_MARKER: marker,
-  });
-  try {
-    await initialize(server);
+  let launches = 0;
+  await withInjectedServer("read-write", async <T>() => {
+    launches++;
+    throw new Error("JXA must not run");
+  }, async (client) => {
     const calls = [
       { name: "create_note", arguments: { title: "x", body: "", folder: "Work" } },
       { name: "update_note", arguments: { id: "p1", body: "x" } },
       { name: "trash_note", arguments: { id: "p1", confirm: true } },
     ];
     for (const call of calls) {
-      const response = await server.request("tools/call", call);
-      assert.equal(response.error, undefined);
-      assert.equal(response.result?.isError, true);
-      assert.match(response.result?.content?.[0]?.text ?? "", /invalid|folder_id|full/i);
+      const result = await client.callTool(call);
+      assert.equal(result.isError, true);
+      assert.match(toolText(result), /invalid|folder_id|full/i);
     }
-    await assert.rejects(access(marker), { code: "ENOENT" });
-  } finally {
-    await server.stop();
-    await rm(fakeBin, { recursive: true, force: true });
-  }
+  });
+  assert.equal(launches, 0);
 });
 
 test("update, move, and trash reject missing revisions before JXA can run", async () => {
-  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-revision-no-jxa-"));
-  const marker = join(fakeBin, "jxa-launched");
-  const fakeOsascript = join(fakeBin, "osascript");
-  await writeFile(
-    fakeOsascript,
-    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nexit 99\n'
-  );
-  await chmod(fakeOsascript, 0o755);
-  const server = startServer("read-write", {
-    PATH: fakeBin,
-    APPLE_NOTES_JXA_MARKER: marker,
-    APPLE_NOTES_TRASH_FOLDER_IDS: "x-coredata://A/ICFolder/trash",
-  });
-  try {
-    await initialize(server);
+  let launches = 0;
+  await withInjectedServer("read-write", async <T>() => {
+    launches++;
+    throw new Error("JXA must not run");
+  }, async (client) => {
     for (const call of [
       { name: "update_note", arguments: { id: "x-coredata://A/ICNote/p1", body: "x" } },
       { name: "move_note", arguments: { id: "x-coredata://A/ICNote/p1", folder_id: "x-coredata://A/ICFolder/work" } },
       { name: "trash_note", arguments: { id: "x-coredata://A/ICNote/p1", confirm: true } },
     ]) {
-      const response = await server.request("tools/call", call);
-      assert.equal(response.result?.isError, true);
-      assert.match(response.result?.content?.[0]?.text ?? "", /expected_revision/i);
+      const result = await client.callTool(call);
+      assert.equal(result.isError, true);
+      assert.match(toolText(result), /expected_revision/i);
     }
-    await assert.rejects(access(marker), { code: "ENOENT" });
-  } finally {
-    await server.stop();
-    await rm(fakeBin, { recursive: true, force: true });
-  }
+  }, { trashFolderIds: "x-coredata://A/ICFolder/trash" });
+  assert.equal(launches, 0);
 });
 
 test("trash confirmation is literal true at schema and runtime boundaries with no JXA", async () => {
@@ -343,34 +386,24 @@ test("trash confirmation is literal true at schema and runtime boundaries with n
   }
   assert.doesNotThrow(() => requireTrashConfirmation(true));
 
-  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-trash-confirm-no-jxa-"));
-  const marker = join(fakeBin, "jxa-launched");
-  const fakeOsascript = join(fakeBin, "osascript");
-  await writeFile(
-    fakeOsascript,
-    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nexit 99\n'
-  );
-  await chmod(fakeOsascript, 0o755);
-  const server = startServer("read-write", {
-    PATH: fakeBin,
-    APPLE_NOTES_JXA_MARKER: marker,
-    APPLE_NOTES_TRASH_FOLDER_IDS: "x-coredata://A/ICFolder/trash",
-  });
-  try {
-    await initialize(server);
+  let launches = 0;
+  await withInjectedServer("read-write", async <T>() => {
+    launches++;
+    throw new Error("JXA must not run");
+  }, async (client) => {
     for (const args of [
       { id: "x-coredata://A/ICNote/p1", expected_revision: "r2|stale" },
       { id: "x-coredata://A/ICNote/p1", expected_revision: "r2|stale", confirm: false },
       { id: "x-coredata://A/ICNote/p1", expected_revision: "r2|stale", confirm: "true" },
     ]) {
-      const response = await server.request("tools/call", {
+      const result = await client.callTool({
         name: "trash_note",
         arguments: args,
       });
-      assert.equal(response.result?.isError, true);
-      assert.match(response.result?.content?.[0]?.text ?? "", /confirm|true/i);
+      assert.equal(result.isError, true);
+      assert.match(toolText(result), /confirm|true/i);
     }
-    const legacy = await server.request("tools/call", {
+    const legacy = await client.callTool({
       name: "delete_note",
       arguments: {
         id: "x-coredata://A/ICNote/p1",
@@ -378,20 +411,17 @@ test("trash confirmation is literal true at schema and runtime boundaries with n
         confirm: true,
       },
     });
-    assert.equal(legacy.result?.isError, true);
-    assert.match(legacy.result?.content?.[0]?.text ?? "", /Tool delete_note not found/);
-    await assert.rejects(access(marker), { code: "ENOENT" });
-  } finally {
-    await server.stop();
-    await rm(fakeBin, { recursive: true, force: true });
-  }
+    assert.equal(legacy.isError, true);
+    assert.match(toolText(legacy), /Tool delete_note not found/);
+  }, { trashFolderIds: "x-coredata://A/ICFolder/trash" });
+  assert.equal(launches, 0);
 });
 
-test("initialize returns version 2.0.0 and the security boundary instructions", async () => {
+test("initialize returns the derived version and security boundary instructions", async () => {
   const server = startServer(undefined);
   try {
     const response = await initialize(server);
-    assert.equal(response.result?.serverInfo?.version, "2.0.0");
+    assert.equal(response.result?.serverInfo?.version, SERVER_VERSION);
     assert.equal(response.result?.instructions, SERVER_INSTRUCTIONS);
     assert.match(response.result?.instructions ?? "", /model provider/i);
     assert.match(response.result?.instructions ?? "", /explicit user approval/i);
@@ -435,22 +465,11 @@ test("invalid raw-HTML configuration exits before startup", async () => {
 });
 
 test("raw HTML calls fail before JXA unless the startup capability is enabled", async () => {
-  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-html-no-jxa-"));
-  const marker = join(fakeBin, "jxa-launched");
-  const fakeOsascript = join(fakeBin, "osascript");
-  await writeFile(
-    fakeOsascript,
-    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nprintf \'{}\'\n'
-  );
-  await chmod(fakeOsascript, 0o755);
-  const server = startServer("read-write", {
-    PATH: fakeBin,
-    APPLE_NOTES_JXA_MARKER: marker,
-    APPLE_NOTES_TRASH_FOLDER_IDS: "x-coredata://A/ICFolder/trash",
-    APPLE_NOTES_ALLOW_RAW_HTML: "false",
-  });
-  try {
-    await initialize(server);
+  let launches = 0;
+  await withInjectedServer("read-write", async <T>() => {
+    launches++;
+    throw new Error("JXA must not run");
+  }, async (client) => {
     for (const call of [
       {
         name: "create_note",
@@ -471,50 +490,34 @@ test("raw HTML calls fail before JXA unless the startup capability is enabled", 
         },
       },
     ]) {
-      const response = await server.request("tools/call", call);
-      assert.equal(response.result?.isError, true);
-      assert.match(response.result?.content?.[0]?.text ?? "", /RAW_HTML_DISABLED/);
+      const result = await client.callTool(call);
+      assert.equal(result.isError, true);
+      assert.match(toolText(result), /RAW_HTML_DISABLED/);
     }
-    await assert.rejects(access(marker), { code: "ENOENT" });
-  } finally {
-    await server.stop();
-    await rm(fakeBin, { recursive: true, force: true });
-  }
+  }, { trashFolderIds: "x-coredata://A/ICFolder/trash" });
+  assert.equal(launches, 0);
 });
 
 test("create passes only escaped or sanitized projections to JXA", async () => {
-  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-html-projection-"));
-  const marker = join(fakeBin, "projected-html");
-  const fakeOsascript = join(fakeBin, "osascript");
-  await writeFile(
-    fakeOsascript,
-    '#!/bin/sh\nprintf \'%s\' "$7" > "$APPLE_NOTES_JXA_MARKER"\nprintf \'{}\'\n'
-  );
-  await chmod(fakeOsascript, 0o755);
-  const server = startServer("read-write", {
-    PATH: fakeBin,
-    APPLE_NOTES_JXA_MARKER: marker,
-    APPLE_NOTES_TRASH_FOLDER_IDS: "x-coredata://A/ICFolder/trash",
-    APPLE_NOTES_ALLOW_RAW_HTML: "true",
-  });
-  try {
-    await initialize(server);
+  let projectedHtml = "";
+  const runner: JxaRunner = async <T>(_script: string, args: string[] = []) => {
+    projectedHtml = args[1] ?? "";
+    return {} as T;
+  };
+  await withInjectedServer("read-write", runner, async (client) => {
     const common = {
       title: "x",
       folder_id: "x-coredata://A/ICFolder/work",
       dry_run: true,
     };
-    const plain = await server.request("tools/call", {
+    const plain = await client.callTool({
       name: "create_note",
       arguments: { ...common, body: "<p>& literal</p>" },
     });
-    assert.equal(plain.result?.isError, undefined);
-    assert.equal(
-      await readFile(marker, "utf8"),
-      "<div>&lt;p&gt;&amp; literal&lt;/p&gt;</div>"
-    );
+    assert.equal(plain.isError, undefined);
+    assert.equal(projectedHtml, "<div>&lt;p&gt;&amp; literal&lt;/p&gt;</div>");
 
-    const html = await server.request("tools/call", {
+    const html = await client.callTool({
       name: "create_note",
       arguments: {
         ...common,
@@ -522,15 +525,161 @@ test("create passes only escaped or sanitized projections to JXA", async () => {
         content_format: "html",
       },
     });
-    assert.equal(html.result?.isError, undefined);
-    assert.equal(
-      await readFile(marker, "utf8"),
-      "<div>safe &amp; <strong>x</strong><br></div>"
-    );
-  } finally {
-    await server.stop();
-    await rm(fakeBin, { recursive: true, force: true });
+    assert.equal(html.isError, undefined);
+    assert.equal(projectedHtml, "<div>safe &amp; <strong>x</strong><br></div>");
+  }, {
+    allowRawHtml: true,
+    trashFolderIds: "x-coredata://A/ICFolder/trash",
+  });
+});
+
+test("process-boundary write failures preserve unknown outcomes and dry-run certainty", async () => {
+  const secret = "PRIVATE PROCESS DETAIL";
+  const noteId = "x-coredata://A/ICNote/p1";
+  const folderId = "x-coredata://A/ICFolder/work";
+  const trashId = "x-coredata://A/ICFolder/trash";
+  const cases: {
+    label: string;
+    executor: JxaProcessExecutor;
+    call: { name: string; arguments: Record<string, unknown> };
+    target: RegExp;
+  }[] = [
+    {
+      label: "timeout",
+      executor: (_file, _args, _options, callback) => callback(
+        Object.assign(new Error(secret), { code: "ETIMEDOUT", killed: true }),
+        secret,
+        secret
+      ),
+      call: {
+        name: "create_note",
+        arguments: { title: "Boundary title", body: "body", folder_id: folderId },
+      },
+      target: /target folder .*ICFolder\/work.*Boundary title/,
+    },
+    {
+      label: "output overflow",
+      executor: (_file, _args, _options, callback) => callback(
+        Object.assign(new Error(secret), {
+          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+        }),
+        secret,
+        secret
+      ),
+      call: {
+        name: "update_note",
+        arguments: { id: noteId, expected_revision: "r2|current", body: "body" },
+      },
+      target: /ICNote\/p1/,
+    },
+    {
+      label: "invalid stdout",
+      executor: (_file, _args, _options, callback) => callback(null, secret, secret),
+      call: {
+        name: "move_note",
+        arguments: {
+          id: noteId,
+          folder_id: folderId,
+          expected_revision: "r2|current",
+        },
+      },
+      target: /ICNote\/p1/,
+    },
+    {
+      label: "generic executor failure",
+      executor: (_file, _args, _options, callback) => callback(
+        new Error(secret),
+        secret,
+        secret
+      ),
+      call: {
+        name: "trash_note",
+        arguments: {
+          id: noteId,
+          expected_revision: "r2|current",
+          confirm: true,
+        },
+      },
+      target: /ICNote\/p1/,
+    },
+  ];
+
+  for (const fixture of cases) {
+    const runner: JxaRunner = <T>(script: string, args: string[] = []) =>
+      runJxaProcess<T>(fixture.executor, script, args);
+    await withInjectedServer("read-write", runner, async (client) => {
+      const mutation = await client.callTool(fixture.call);
+      const mutationText = toolText(mutation);
+      assert.equal(mutation.isError, true, fixture.label);
+      assert.match(mutationText, /MUTATION_OUTCOME_UNKNOWN/);
+      assert.match(mutationText, /mutation may already have occurred/i);
+      assert.match(mutationText, fixture.target);
+      assert.match(mutationText, /re-read or list.*do not retry blindly/i);
+      assert.doesNotMatch(mutationText, /PRIVATE PROCESS DETAIL/);
+
+      const dryRun = await client.callTool({
+        ...fixture.call,
+        arguments: { ...fixture.call.arguments, dry_run: true },
+      });
+      const dryRunText = toolText(dryRun);
+      assert.equal(dryRun.isError, true, `${fixture.label} dry-run`);
+      assert.match(dryRunText, /DRY_RUN_AUTOMATION_FAILED/);
+      assert.match(dryRunText, /requested no mutation.*did not enter the mutation branch/i);
+      assert.doesNotMatch(dryRunText, /may already have occurred/i);
+      assert.doesNotMatch(dryRunText, /PRIVATE PROCESS DETAIL/);
+    }, { trashFolderIds: trashId });
   }
+});
+
+test("safe JXA domain errors survive write handling unchanged", async () => {
+  const runner: JxaRunner = async <T>() => {
+    throw new SafeToolError(
+      "CONFLICT",
+      "The note changed after it was read. Re-read it before retrying."
+    );
+  };
+  await withInjectedServer("read-write", runner, async (client) => {
+    const result = await client.callTool({
+      name: "update_note",
+      arguments: {
+        id: "x-coredata://A/ICNote/p1",
+        expected_revision: "r2|stale",
+        body: "replacement",
+      },
+    });
+    assert.equal(result.isError, true);
+    assert.equal(
+      toolText(result),
+      "Error [CONFLICT]: The note changed after it was read. Re-read it before retrying."
+    );
+  }, { trashFolderIds: "x-coredata://A/ICFolder/trash" });
+});
+
+test("oversized successful write results become conservative boundary failures", async () => {
+  const runner: JxaRunner = async <T>() => ({ private: "x".repeat(70_000) }) as T;
+  await withInjectedServer("read-write", runner, async (client) => {
+    const common = {
+      name: "update_note",
+      arguments: {
+        id: "x-coredata://A/ICNote/p1",
+        expected_revision: "r2|current",
+        body: "replacement",
+      },
+    };
+    const mutation = await client.callTool(common);
+    assert.equal(mutation.isError, true);
+    assert.match(toolText(mutation), /MUTATION_OUTCOME_UNKNOWN/);
+    assert.match(toolText(mutation), /do not retry blindly/i);
+    assert.doesNotMatch(toolText(mutation), /xxxxx/);
+
+    const dryRun = await client.callTool({
+      ...common,
+      arguments: { ...common.arguments, dry_run: true },
+    });
+    assert.equal(dryRun.isError, true);
+    assert.match(toolText(dryRun), /DRY_RUN_AUTOMATION_FAILED/);
+    assert.doesNotMatch(toolText(dryRun), /may already have occurred/i);
+  }, { trashFolderIds: "x-coredata://A/ICFolder/trash" });
 });
 
 test("invalid shared-write configuration exits before startup", async () => {
@@ -553,115 +702,75 @@ test("invalid case-mismatched mode exits before startup with a clear error", asy
 });
 
 test("direct stale write calls in read-only mode are rejected without launching JXA", async () => {
-  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-no-jxa-"));
-  const marker = join(fakeBin, "jxa-launched");
-  const fakeOsascript = join(fakeBin, "osascript");
-  await writeFile(
-    fakeOsascript,
-    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nexit 99\n'
-  );
-  await chmod(fakeOsascript, 0o755);
-
-  const server = startServer("read-only", {
-    PATH: fakeBin,
-    APPLE_NOTES_JXA_MARKER: marker,
-  });
-  try {
-    await initialize(server);
+  let launches = 0;
+  await withInjectedServer("read-only", async <T>() => {
+    launches++;
+    throw new Error("JXA must not run");
+  }, async (client) => {
     for (const name of ["create_note", "update_note", "move_note", "trash_note", "delete_note"]) {
-      const response = await server.request("tools/call", {
+      const result = await client.callTool({
         name,
         arguments: {},
       });
-      assert.equal(response.error, undefined);
-      assert.equal(response.result?.isError, true);
-      assert.match(response.result?.content?.[0]?.text ?? "", new RegExp(`Tool ${name} not found`));
+      assert.equal(result.isError, true);
+      assert.match(toolText(result), new RegExp(`Tool ${name} not found`));
     }
-
-    await assert.rejects(access(marker), { code: "ENOENT" });
-  } finally {
-    await server.stop();
-    await rm(fakeBin, { recursive: true, force: true });
-  }
+  });
+  assert.equal(launches, 0);
 });
 
 test("trash bootstrap permits folder discovery but blocks every note-bearing read", async () => {
-  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-trash-bootstrap-"));
-  const marker = join(fakeBin, "jxa-launched");
-  const fakeOsascript = join(fakeBin, "osascript");
-  await writeFile(
-    fakeOsascript,
-    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nprintf \'{"accountIds":[],"folders":[]}\'\n'
-  );
-  await chmod(fakeOsascript, 0o755);
-
-  const server = startServer("read-only", {
-    PATH: fakeBin,
-    APPLE_NOTES_JXA_MARKER: marker,
-    APPLE_NOTES_TRASH_FOLDER_IDS: undefined,
-  });
-  try {
-    await initialize(server);
-    const discovery = await server.request("tools/call", {
+  let launches = 0;
+  const runner: JxaRunner = async <T>() => {
+    launches++;
+    return { accountIds: [], folders: [] } as T;
+  };
+  await withInjectedServer("read-only", runner, async (client) => {
+    const discovery = await client.callTool({
       name: "list_folders",
       arguments: {},
     });
-    assert.equal(discovery.result?.isError, undefined);
-    const payload = JSON.parse(discovery.result?.content?.[0]?.text ?? "null");
+    assert.equal(discovery.isError, undefined);
+    const payload = JSON.parse(toolText(discovery));
     assert.equal(payload.trash_configuration.ready, false);
-    await rm(marker, { force: true });
+    assert.equal(launches, 1);
 
     for (const call of [
       { name: "list_notes", arguments: {} },
       { name: "search_notes", arguments: { query: "private" } },
       { name: "get_note", arguments: { id: "x-coredata://A/ICNote/p1" } },
     ]) {
-      const response = await server.request("tools/call", call);
-      assert.equal(response.result?.isError, true);
-      assert.match(response.result?.content?.[0]?.text ?? "", /TRASH_CONFIG_REQUIRED/);
+      const result = await client.callTool(call);
+      assert.equal(result.isError, true);
+      assert.match(toolText(result), /TRASH_CONFIG_REQUIRED/);
     }
-    await assert.rejects(access(marker), { code: "ENOENT" });
-  } finally {
-    await server.stop();
-    await rm(fakeBin, { recursive: true, force: true });
-  }
+    assert.equal(launches, 1);
+  });
 });
 
 test("partial multi-account trash configuration is not ready and blocks reads", async () => {
-  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-trash-partial-"));
-  const fakeOsascript = join(fakeBin, "osascript");
   const accountA = "x-coredata://A/ICAccount/p1";
   const accountB = "x-coredata://B/ICAccount/p1";
   const trashA = "x-coredata://A/ICFolder/trash";
   const trashB = "x-coredata://B/ICFolder/trash";
-  const folderPayload = JSON.stringify({
+  const folderPayload = {
     accountIds: [accountA, accountB],
     folders: [
       { id: trashA, name: "Bin A", account: { id: accountA, name: "A" }, count: 0 },
       { id: trashB, name: "Bin B", account: { id: accountB, name: "B" }, count: 0 },
     ],
-  });
-  await writeFile(fakeOsascript, `#!/bin/sh\nprintf '%s' '${folderPayload}'\n`);
-  await chmod(fakeOsascript, 0o755);
-
-  const discoveryServer = startServer("read-only", {
-    PATH: fakeBin,
-    APPLE_NOTES_TRASH_FOLDER_IDS: trashA,
-  });
-  try {
-    await initialize(discoveryServer);
-    const response = await discoveryServer.request("tools/call", {
+  };
+  await withInjectedServer("read-only", async <T>() => folderPayload as T, async (client) => {
+    const response = await client.callTool({
       name: "list_folders",
       arguments: {},
     });
-    const payload = JSON.parse(response.result?.content?.[0]?.text ?? "null");
+    const payload = JSON.parse(toolText(response));
     assert.equal(payload.trash_configuration.ready, false);
     assert.deepEqual(payload.trash_configuration.missing_account_ids, [accountB]);
-  } finally {
-    await discoveryServer.stop();
-  }
+  }, { trashFolderIds: trashA });
 
-  const metadataPayload = JSON.stringify({
+  const metadataPayload = {
     ids: [],
     names: [],
     modified: [],
@@ -677,24 +786,14 @@ test("partial multi-account trash configuration is not ready and blocks reads", 
     location: null,
     locations: {},
     rich: { available: true, byNote: {} },
-  });
-  await writeFile(fakeOsascript, `#!/bin/sh\nprintf '%s' '${metadataPayload}'\n`);
-  await chmod(fakeOsascript, 0o755);
-  const readServer = startServer("read-only", {
-    PATH: fakeBin,
-    APPLE_NOTES_TRASH_FOLDER_IDS: trashA,
-  });
-  try {
-    await initialize(readServer);
-    const response = await readServer.request("tools/call", {
+  };
+  await withInjectedServer("read-only", async <T>() => metadataPayload as T, async (client) => {
+    const response = await client.callTool({
       name: "list_notes",
       arguments: {},
     });
-    assert.equal(response.result?.isError, true);
-    assert.match(response.result?.content?.[0]?.text ?? "", /TRASH_CONFIG_INCOMPLETE/);
-    assert.match(response.result?.content?.[0]?.text ?? "", new RegExp(accountB));
-  } finally {
-    await readServer.stop();
-    await rm(fakeBin, { recursive: true, force: true });
-  }
+    assert.equal(response.isError, true);
+    assert.match(toolText(response), /TRASH_CONFIG_INCOMPLETE/);
+    assert.match(toolText(response), new RegExp(accountB));
+  }, { trashFolderIds: trashA });
 });

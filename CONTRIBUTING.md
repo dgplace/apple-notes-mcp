@@ -7,12 +7,14 @@ Thanks for your interest in improving apple-notes-mcp.
 ```bash
 git clone https://github.com/simantaturja/apple-notes-mcp.git
 cd apple-notes-mcp
-npm install        # runs the build via the `prepare` hook
+npm ci --ignore-scripts  # install the exact lockfile without lifecycle scripts
+npm run build            # required: --ignore-scripts skips prepare/dist generation
 ```
 
 ## Workflow
 
 - `npm test` — fast unit tests. No Notes.app, no macOS automation permission needed.
+- `npm run check:dependency-engines` — verify reviewed transitive Node 18 compatibility.
 - `npm run dev` — `tsc --watch` for incremental builds.
 - `npm run build` — type-check and emit `dist/`.
 - `npm run test:integration` — full lifecycle against the **real** Notes.app

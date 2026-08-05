@@ -28,3 +28,43 @@ export function safeErrorText(error: unknown): string {
     .slice(0, MAX_SAFE_MESSAGE_CHARS);
   return `Error [${error.code}]: ${message}`;
 }
+
+export interface WriteBoundaryContext {
+  automationStarted: boolean;
+  dryRun: boolean;
+  operation: string;
+  noteId?: string;
+  folderId?: string;
+  title?: string;
+}
+
+/**
+ * Preserve explicit JXA domain failures, but never present a process-level
+ * failure as proof that a mutation-capable call made no change. RESULT_TOO_LARGE
+ * is generated locally after a successful automation response, so it has the
+ * same unknown-outcome treatment as losing the child response itself.
+ */
+export function writeBoundaryError(
+  error: unknown,
+  context: WriteBoundaryContext
+): unknown {
+  if (error instanceof SafeToolError && error.code !== "RESULT_TOO_LARGE") {
+    return error;
+  }
+  if (!context.automationStarted) return error;
+
+  if (context.dryRun) {
+    return safeError(
+      "DRY_RUN_AUTOMATION_FAILED",
+      `The ${context.operation} dry-run automation failed. This call requested no mutation and did not enter the mutation branch. No process output was exposed.`
+    );
+  }
+
+  const target = context.noteId
+    ? ` for note ${context.noteId.slice(0, 2048)}`
+    : ` in target folder ${(context.folderId ?? "unknown").slice(0, 2048)} with title ${(context.title ?? "unknown").slice(0, 256)}`;
+  return safeError(
+    "MUTATION_OUTCOME_UNKNOWN",
+    `The ${context.operation} mutation may already have occurred${target}, but automation ended without a complete verified response. Re-read or list the target before retrying; do not retry blindly.`
+  );
+}

@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { runJxa } from "../jxa.js";
+import { runJxa, type JxaRunner } from "../jxa.js";
 import {
   JXA_BULK_RICH_METADATA,
   JXA_IDENTITY_HELPERS,
@@ -257,7 +257,10 @@ export function fitNoteDetailToResult(note: NoteDetail): NoteDetail {
   return fitted;
 }
 
-export function registerReadTools(server: McpServer): void {
+export function registerReadTools(
+  server: McpServer,
+  jxaRunner: JxaRunner = runJxa
+): void {
   // Invalid explicit configuration prevents startup. Absence intentionally
   // enters discovery-only mode: list_folders works, note-bearing reads do not.
   const trashFolderIds = parseTrashFolderIds(process.env.APPLE_NOTES_TRASH_FOLDER_IDS);
@@ -275,7 +278,7 @@ export function registerReadTools(server: McpServer): void {
     async ({ limit, offset }) => {
       try {
         const request = normalizePageRequest(limit, offset, READ_LIMITS.defaultFolderResults);
-        const catalog = await runJxa<FolderCatalogResult>(`${JXA_SAFE_ERRORS}
+        const catalog = await jxaRunner<FolderCatalogResult>(`${JXA_SAFE_ERRORS}
           ${JXA_IDENTITY_HELPERS}
           function run() {
             return runSafely(() => {
@@ -352,7 +355,7 @@ export function registerReadTools(server: McpServer): void {
           throw safeError("INVALID_ARGUMENT", "Provide either folder_id or folder, not both.");
         }
         const request = normalizePageRequest(limit, offset, READ_LIMITS.defaultNoteResults);
-        const meta = await runJxa<NoteMetadata>(noteMetadataScript(), [
+        const meta = await jxaRunner<NoteMetadata>(noteMetadataScript(), [
           folderId ?? "",
           folderName ?? "",
           JSON.stringify(trashFolderIds),
@@ -389,7 +392,7 @@ export function registerReadTools(server: McpServer): void {
         if (scope !== "all" && scope !== "title") {
           throw safeError("INVALID_ARGUMENT", "scope must be exactly 'all' or 'title'.");
         }
-        const meta = await runJxa<NoteMetadata>(noteMetadataScript(), [
+        const meta = await jxaRunner<NoteMetadata>(noteMetadataScript(), [
           "",
           "",
           JSON.stringify(trashFolderIds),
@@ -433,7 +436,7 @@ export function registerReadTools(server: McpServer): void {
         if (!noteId && !noteTitle) throw safeError("INVALID_ARGUMENT", "Provide either id or title.");
         if (noteId && noteTitle) throw safeError("INVALID_ARGUMENT", "Provide either id or title, not both.");
         const pageRequest = normalizeBodyPageRequest(max_chars, offset);
-        const note = await runJxa<NoteDetail>(`${JXA_SAFE_ERRORS}
+        const note = await jxaRunner<NoteDetail>(`${JXA_SAFE_ERRORS}
           ${JXA_IDENTITY_HELPERS}
           ${JXA_RICH_CONTENT}
           ${JXA_REVISION}
