@@ -46,8 +46,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Removed body-prefix HTML auto-detection. Enabled raw HTML is parsed into a
   balanced, attribute-free Notes-compatible subset; scripts, remote resources,
   event handlers, links, media, tables/checklists, unsupported elements, and
-  malformed markup fail before mutation. Appends preserve the exact existing
-  body and add only the escaped or sanitized fragment.
+  malformed markup fail before mutation.
 - Stale revisions fail with `CONFLICT` immediately before mutation. Locked
   notes, configured-trash targets, and shared writes without both gates fail
   closed.
@@ -67,6 +66,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cases fail before mutation.
 - Errors after a mutation attempt conservatively warn that the change may have
   occurred and require re-reading/listing before any retry.
+- Post-write content verification compares exact logical text, title, stable
+  destination, and revision instead of Notes' unstable raw HTML serialization.
+  This accepts formatting-only Notes canonicalization while rejecting textual
+  differences. Append now fails before assignment for detected rich content:
+  Notes exposes no append primitive, so a whole-body rewrite cannot prove that
+  attachments, drawings, tables, or checklists survive.
 
 ## [2.0.0] - 2026-08-05
 

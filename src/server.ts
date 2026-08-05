@@ -25,7 +25,7 @@ export const SERVER_INSTRUCTIONS = [
   "Write content defaults to escaped plain text. Raw HTML requires both APPLE_NOTES_ALLOW_RAW_HTML=true and content_format=html, and is restricted to a small attribute-free subset.",
   "trash_note requires confirm=true and a current revision, explicitly moves to the validated stable configured Recently Deleted destination, and never invokes Notes' delete command or any permanent-delete operation.",
   "Notes automation exposes account id, name, default-folder id, and upgraded state, but no trustworthy account type or shared-note ownership; trash previews and results report those facts as unavailable or unknown.",
-  "Detected rich-content replacement is rejected unless allow_rich_content_loss=true, and trashing a note already in Recently Deleted is rejected to prevent permanent erasure.",
+  "Detected rich-content replacement is rejected unless allow_rich_content_loss=true; rich-content append is always rejected because Notes has no append primitive. Trashing a note already in Recently Deleted is rejected to prevent permanent erasure.",
   "Writes to locked notes are refused. Ordinary shared-note writes require APPLE_NOTES_ALLOW_SHARED_WRITES=true plus allow_shared_note=true; shared trashing additionally requires allow_shared_trash=true and confirm_shared_impact=true.",
 ].join(" ");
 

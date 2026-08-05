@@ -78,13 +78,16 @@ for (const fixture of FIXTURES) {
     assert.equal(note.body, "<div><h1>Original title</h1></div><div>replacement</div>");
   });
 
-  test(`append preserves ${fixture.kind} HTML and the title`, () => {
+  test(`append rejects ${fixture.kind} before any body assignment`, () => {
     const { note, nameCalls } = mockNote(fixture);
 
-    updateNoteContent(note, "<div>added</div>", "append", "", false);
+    assert.throws(
+      () => updateNoteContent(note, "<div>added</div>", "append", "", false),
+      (error: any) => error.appleNotesSafeCode === "RICH_CONTENT_APPEND_REFUSED",
+    );
 
-    assert.equal(note.body, fixture.html + "<div>added</div>");
-    assert.equal(nameCalls(), 0, "append must not reconstruct or query the title");
+    assert.equal(typeof note.body, "function", "rejection must happen before assignment");
+    assert.equal(nameCalls(), 0, "rejected append must not query or reconstruct the title");
   });
 }
 
@@ -101,11 +104,10 @@ test("replace preserves the existing title when new_title is absent", () => {
   assert.equal(nameCalls(), 1);
 });
 
-test("raw HTML append adds only its sanitized fragment to exact existing HTML", () => {
+test("ordinary raw HTML append adds its sanitized fragment", () => {
   const fixture: Fixture = {
     kind: "attachment",
-    html: '<div><h1>Exact title</h1></div><object data-internal="opaque"></object>',
-    attachmentNames: ["report.pdf"],
+    html: "<div><h1>Exact title</h1></div><div>ordinary text</div>",
   };
   const { note, nameCalls } = mockNote(fixture, "Exact title");
   const fragment = prepareContent("<P>trusted &amp; <STRONG>new</STRONG><BR /></P>", "html", true).html;

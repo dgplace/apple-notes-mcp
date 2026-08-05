@@ -91,8 +91,9 @@ export const JXA_BULK_RICH_METADATA = `
   }
 `;
 
-// Mutate one already-resolved note while preserving its existing HTML for
-// append operations and refusing destructive whole-body rewrites by default.
+// Plan one already-resolved note mutation. Ordinary append starts from the
+// current HTML serialization, but detected rich content is refused because
+// Notes exposes only whole-body assignment, not a lossless append primitive.
 // Kept as plain JavaScript so the behavior can be exercised with mock Notes
 // objects in Node without Automation permission.
 export const JXA_UPDATE_NOTE = `
@@ -107,19 +108,26 @@ export const JXA_UPDATE_NOTE = `
 
   function planNoteUpdate(note, bodyHtml, mode, newTitle, allowRichContentLoss) {
     const existingBody = note.body();
+    const kinds = richContentKinds(note, existingBody);
 
     if (mode === "append") {
+      if (kinds.length > 0) {
+        throw safeError(
+          "RICH_CONTENT_APPEND_REFUSED",
+          "Refusing to append to a note containing rich content (" + kinds.join(", ") +
+          "). Notes exposes no append primitive, so assigning body HTML could discard those items."
+        );
+      }
       const nextBody = existingBody + bodyHtml;
       return {
         existingBody: existingBody,
         nextBody: nextBody,
         // Appending must not reconstruct or even query the title.
         projectedTitle: null,
-        richKinds: richContentKinds(note, existingBody),
+        richKinds: kinds,
       };
     }
 
-    const kinds = richContentKinds(note, existingBody);
     if (kinds.length > 0 && !allowRichContentLoss) {
       throw safeError("RICH_CONTENT_REFUSED",
         "Refusing to replace a note containing rich content (" + kinds.join(", ") +
@@ -374,6 +382,110 @@ export const JXA_WRITE_SAFETY = `
       "The mutation may already have occurred for note " + stableId +
       ". Re-read or list the note before retrying; do not retry blindly. " + detail
     );
+  }
+
+  // Notes canonicalizes written HTML (for example, h1 becomes styled b/span
+  // markup). Compare an exact, bounded text projection instead of unstable raw
+  // serialization. Top-level blocks are logical lines; nested block/list
+  // boundaries and explicit br elements remain line breaks. Tags and
+  // attributes carry no verification meaning.
+  function decodeSemanticEntities(text) {
+    const named = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
+    return text.replace(/&(#(?:[xX][0-9a-fA-F]+|[0-9]+)|[A-Za-z]+);/g, (match, entity) => {
+      if (Object.prototype.hasOwnProperty.call(named, entity)) return named[entity];
+      if (entity[0] !== "#") return match;
+      const hexadecimal = entity[1] === "x" || entity[1] === "X";
+      const value = Number.parseInt(entity.slice(hexadecimal ? 2 : 1), hexadecimal ? 16 : 10);
+      if (!Number.isFinite(value) || value <= 0 || value > 0x10ffff) return match;
+      try { return String.fromCodePoint(value); } catch (_) { return match; }
+    });
+  }
+
+  function semanticHtmlLines(html) {
+    if (typeof html !== "string" || html.length > 1000000) return null;
+    const blockTags = {
+      body: true, div: true, p: true, blockquote: true, pre: true,
+      ul: true, ol: true, li: true, h1: true, h2: true, h3: true,
+      h4: true, h5: true, h6: true,
+    };
+    const boundary = "\\u0000";
+    const lines = [];
+    let current = "";
+    let blockDepth = 0;
+    let preDepth = 0;
+    let cursor = 0;
+    const tokens = html.match(/<[^>]*>|[^<]+/g) || [];
+
+    function finishRoot() {
+      while (current.endsWith(boundary)) current = current.slice(0, -1);
+      lines.push(current.split(boundary).join("\\n"));
+      current = "";
+    }
+
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      const at = html.indexOf(token, cursor);
+      if (at !== cursor) return null;
+      cursor += token.length;
+      if (token[0] !== "<") {
+        if (preDepth === 0 && /^\\s*[\\r\\n]\\s*$/.test(token)) continue;
+        current += decodeSemanticEntities(token.replace(/\\r\\n?/g, "\\n"));
+        continue;
+      }
+      if (/^<!--/.test(token)) continue;
+      const match = /^<\\s*(\\/?)\\s*([A-Za-z][A-Za-z0-9:-]*)\\b[^>]*>$/.exec(token);
+      if (!match) return null;
+      const closing = match[1] === "/";
+      const tag = match[2].toLowerCase();
+      if (tag === "br" && !closing) {
+        current += "\\n";
+        continue;
+      }
+      if (!blockTags[tag]) continue;
+      if (!closing) {
+        if (blockDepth === 0 && current !== "") finishRoot();
+        blockDepth++;
+        if (tag === "pre") preDepth++;
+        continue;
+      }
+      if (blockDepth <= 0) return null;
+      if (tag === "pre" && preDepth > 0) preDepth--;
+      blockDepth--;
+      if (blockDepth === 0) {
+        finishRoot();
+      } else if (current !== "" && !current.endsWith(boundary)) {
+        current += boundary;
+      }
+    }
+    if (cursor !== html.length || blockDepth !== 0) return null;
+    if (current !== "" || lines.length === 0) finishRoot();
+    return lines;
+  }
+
+  function semanticNoteProjection(html, exactTitle) {
+    const lines = semanticHtmlLines(html);
+    if (!lines || lines.length === 0 || lines[0] !== exactTitle) return null;
+    return { title: lines[0], bodyText: lines.slice(1).join("\\n") };
+  }
+
+  function assertSemanticProjectionVerifiable(expectedHtml, exactTitle) {
+    if (!semanticNoteProjection(expectedHtml, exactTitle)) {
+      throw safeError(
+        "CONTENT_VERIFICATION_UNAVAILABLE",
+        "The projected note title/body text cannot be verified within the bounded semantic verifier. No mutation was attempted."
+      );
+    }
+  }
+
+  function assertSemanticPostWriteState(id, state, expectedTitle, expectedHtml, expectedFolderId) {
+    if (state.name !== expectedTitle || state.folder.id !== expectedFolderId) {
+      postWriteVerificationFailure(id, "Notes did not verify the exact requested title and stable destination.");
+    }
+    const expected = semanticNoteProjection(expectedHtml, expectedTitle);
+    const actual = semanticNoteProjection(state.body, expectedTitle);
+    if (!expected || !actual || actual.bodyText !== expected.bodyText) {
+      postWriteVerificationFailure(id, "Notes did not verify the exact projected body text after HTML canonicalization.");
+    }
   }
 
   function postCreateAttemptFailure(folderId, title, detail) {

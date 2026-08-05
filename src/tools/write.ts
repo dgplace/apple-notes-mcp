@@ -118,6 +118,7 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy, jxaRu
                 callAllowsShared
               );
               const html = "<div><h1>" + escapeHtml(argv[0]) + "</h1></div>" + argv[1];
+              assertSemanticProjectionVerifiable(html, argv[0]);
 
               const preview = {
                   dry_run: true,
@@ -141,9 +142,7 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy, jxaRu
                   target.folder.notes.push(note);
                   attempt.id = note.id();
                   const state = verifyPostWrite(attempt.id, () => authoritativeNoteState(Notes, attempt.id, true));
-                  if (state.name !== argv[0] || state.body !== html || state.folder.id !== target.id) {
-                    postWriteVerificationFailure(attempt.id, "The created note did not match its requested title, body, and destination.");
-                  }
+                  assertSemanticPostWriteState(attempt.id, state, argv[0], html, target.id);
                   return Object.assign(publicVerifiedState(state), {
                     post_write: publicVerifiedState(state),
                   });
@@ -182,7 +181,7 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy, jxaRu
     "update_note",
     {
       description:
-        "Conflict-safe replace or append by full note id. Content defaults to escaped plain text; raw HTML requires two explicit gates.",
+        "Conflict-safe replace or ordinary-text append by full note id. Append rejects detected rich content because Notes has no append primitive. Raw HTML requires two explicit gates.",
       inputSchema: {
         id: fullNoteId,
         expected_revision: expectedRevision,
@@ -232,6 +231,7 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy, jxaRu
               }
               const plan = planNoteUpdate(note, argv[2], argv[3], argv[4], argv[5] === "true");
               const projectedTitle = plan.projectedTitle === null ? existingName : plan.projectedTitle;
+              assertSemanticProjectionVerifiable(plan.nextBody, projectedTitle);
               const current = assertExpectedRevision(Notes, note, target.id, argv[1], context);
               const preview = {
                   dry_run: true,
@@ -260,13 +260,13 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy, jxaRu
                   applyNoteUpdate(note, plan);
                   const state = verifyPostWrite(target.id, () => authoritativeNoteState(Notes, target.id, true));
                   assertPostWriteRevisionChanged(target.id, current.revision, state.revision);
-                  if (
-                    state.body !== plan.nextBody ||
-                    state.name !== projectedTitle ||
-                    state.folder.id !== current.location.folder.id
-                  ) {
-                    postWriteVerificationFailure(target.id, "The updated note did not match the projected title, body, location, and new revision.");
-                  }
+                  assertSemanticPostWriteState(
+                    target.id,
+                    state,
+                    projectedTitle,
+                    plan.nextBody,
+                    current.location.folder.id
+                  );
                   return Object.assign(publicVerifiedState(state), {
                     operation: argv[3],
                     post_write: publicVerifiedState(state),

@@ -17,7 +17,9 @@ const helpers = new Function(
      moveNoteToConfiguredTrash, executeWritePlan, publicAccountMetadata,
      assertTrashableNote, resolveRecoverableTrashDestination,
      postWriteVerificationFailure, assertPostWriteRevisionChanged,
-     assertPostTrashState, verifyPostWrite, attemptMutation, attemptCreateMutation };`,
+     assertPostTrashState, verifyPostWrite, attemptMutation, attemptCreateMutation,
+     semanticHtmlLines, semanticNoteProjection, assertSemanticProjectionVerifiable,
+     assertSemanticPostWriteState };`,
 )() as Record<string, (...args: any[]) => any>;
 
 function noteFixture(options: { locked?: boolean; shared?: boolean } = {}) {
@@ -85,7 +87,7 @@ test("stale trash revision makes no Notes move-to-trash request", () => {
   assert.equal(trashRequests, 0);
 });
 
-test("matching revision permits the planned append without rebuilding existing HTML", () => {
+test("matching revision permits the planned ordinary whole-body append", () => {
   const fixture = noteFixture();
   const Notes = notesFor(fixture.note);
   const expectedToken = ["r2", NOTE_ID, LOCATION.account.id, LOCATION.folder.id, "2026-08-06T01:02:03.456Z"]
@@ -414,6 +416,71 @@ test("authoritative read-back returns verified location and a new full-precision
   assert.equal(publicState.folder.id, "x-coredata://A/ICFolder/archive");
   assert.equal(publicState.body_html_chars, note.body().length);
   assert.ok(!("body" in publicState), "read-back validation must not return raw HTML");
+});
+
+test("semantic verification accepts exact Notes h1 canonicalization without weakening text checks", () => {
+  const intended = "<div><h1>TITLE</h1></div><div>MARKER original</div>";
+  const notesNormalized =
+    '<div><b><span style="font-size: 24px">TITLE</span></b></div>\n' + "<div>MARKER original</div>\n";
+  assert.deepEqual(helpers.semanticNoteProjection(intended, "TITLE"), {
+    title: "TITLE",
+    bodyText: "MARKER original",
+  });
+  assert.deepEqual(
+    helpers.semanticNoteProjection(notesNormalized, "TITLE"),
+    helpers.semanticNoteProjection(intended, "TITLE"),
+  );
+  assert.doesNotThrow(() =>
+    helpers.assertSemanticPostWriteState(
+      NOTE_ID,
+      { name: "TITLE", folder: { id: LOCATION.folder.id }, body: notesNormalized },
+      "TITLE",
+      intended,
+      LOCATION.folder.id,
+    ),
+  );
+
+  for (const state of [
+    { name: "WRONG", folder: { id: LOCATION.folder.id }, body: notesNormalized },
+    { name: "TITLE", folder: { id: "x-coredata://A/ICFolder/wrong" }, body: notesNormalized },
+    {
+      name: "TITLE",
+      folder: { id: LOCATION.folder.id },
+      body: notesNormalized.replace("MARKER original", "MARKER changed"),
+    },
+  ]) {
+    assert.throws(
+      () => helpers.assertSemanticPostWriteState(NOTE_ID, state, "TITLE", intended, LOCATION.folder.id),
+      (error: any) => error.appleNotesSafeCode === "POST_WRITE_VERIFICATION_FAILED",
+    );
+  }
+});
+
+test("semantic projection preserves body line structure and ignores formatting-only markup", () => {
+  const intended =
+    "<div><h1>A &amp; B</h1></div>" + "<div>one<br>two</div><ul><li>three</li><li><strong>four</strong></li></ul>";
+  const normalized =
+    '<div><b><span style="font-size:24px">A &amp; B</span></b></div>\n' +
+    "<div>one<br>two</div>\n<ul>\n<li>three</li><li><b>four</b></li>\n</ul>\n";
+  assert.deepEqual(helpers.semanticNoteProjection(intended, "A & B"), {
+    title: "A & B",
+    bodyText: "one\ntwo\nthree\nfour",
+  });
+  assert.deepEqual(
+    helpers.semanticNoteProjection(normalized, "A & B"),
+    helpers.semanticNoteProjection(intended, "A & B"),
+  );
+});
+
+test("unverifiable semantic projections fail before a caller can mutate", () => {
+  assert.throws(
+    () => helpers.assertSemanticProjectionVerifiable("<div>body without requested title</div>", "TITLE"),
+    (error: any) => error.appleNotesSafeCode === "CONTENT_VERIFICATION_UNAVAILABLE",
+  );
+  assert.throws(
+    () => helpers.assertSemanticProjectionVerifiable("x".repeat(1_000_001), "TITLE"),
+    (error: any) => error.appleNotesSafeCode === "CONTENT_VERIFICATION_UNAVAILABLE",
+  );
 });
 
 test("post-write verification failures are explicit safe errors", () => {

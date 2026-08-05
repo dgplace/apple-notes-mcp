@@ -252,7 +252,7 @@ write mode alone does not express user intent for an individual operation.
 | `search_notes` | read-only, read-write | Notes-side case-insensitive title/body matching that returns metadata only; plaintext is never returned by search. Query length is capped at 256. Params: `query`, `limit`, `offset`, `scope`. |
 | `get_note` | read-only, read-write | Read one selected live note. `max_chars` defaults to 10000 and clamps at 20000; use `offset`/`page.next_offset` to continue. |
 | `create_note` | read-write | Create in an explicitly selected full `folder_id`; `content_format` defaults to `plain`; supports `dry_run` and verifies real writes. |
-| `update_note` | read-write | Conflict-safe replace or append by full `id` plus required `expected_revision`; `content_format` defaults to `plain`; supports `dry_run`, `new_title?`, and the rich/shared per-call gates. |
+| `update_note` | read-write | Conflict-safe replace or ordinary-text append by full `id` plus required `expected_revision`; detected rich content makes append fail before assignment. `content_format` defaults to `plain`; supports `dry_run`, `new_title?`, and the rich/shared per-call gates. |
 | `move_note` | read-write | Conflict-safe move by full note `id`, full destination `folder_id`, and required `expected_revision`; supports `dry_run`. |
 | `trash_note` | read-write | Confirmed request to explicitly move one live note to the one configured stable Recently Deleted folder for its account. Requires full `id`, current `expected_revision`, and literal `confirm=true`; supports zero-mutation `dry_run` and verifies the exact destination/new revision. It never invokes Notes' delete command. |
 
@@ -309,9 +309,13 @@ account, and folder IDs plus Notes' millisecond-precision modification date. Pas
 that value immediately before mutation and returns `CONFLICT` without changing
 the note if it is stale. Use `dry_run=true` to validate the same revision and
 see the stable target, projected title/body-size change or destination, and loss
-flags without issuing a Notes mutation. Every real write is then read back and
-must match its projected state; the response carries the authoritative new
-`revision` and `post_write.verified=true`.
+flags without issuing a Notes mutation. Every real write is then read back.
+Notes rewrites equivalent HTML, so create, replace, and ordinary append verify
+the exact title and stable destination plus an exact bounded logical-text
+projection of the intended and Notes-canonicalized bodies; updates also require
+a new revision. Formatting-only tag and attribute changes are not treated as
+text loss. The response carries the authoritative new `revision` and
+`post_write.verified=true`.
 
 If Notes reports an error after a mutation was attempted, the server returns
 `POST_WRITE_VERIFICATION_FAILED` and explicitly warns that the change may have
@@ -365,8 +369,10 @@ fails safely and never falls back to its potentially permanent delete command.
   styles, comments, declarations, headings, tables, checklists, media, links,
   embedded objects, every attribute/event handler/URL, unsupported entities,
   and malformed markup are rejected before Notes automation runs.
-- Append adds only the escaped or sanitized fragment to the exact existing
-  Notes HTML. It does not reconstruct the title or existing rich content.
+- Notes exposes no append/range command: append assigns the existing HTML plus
+  the escaped or sanitized fragment as a whole body. It is allowed only when
+  attachment, drawing, table, and checklist detection finds no rich content.
+  Detected rich content fails before body assignment; use Notes.app directly.
 - The title is rendered as the note's first line (`<h1>`), which Notes uses as the note name.
 
 ### Secure write operation
@@ -408,8 +414,8 @@ The following Notes limitations remain even with these controls:
   scripting interface. Whole-body replacement fails closed when supported rich
   markers are detected unless that call sets `allow_rich_content_loss=true`.
   Detection is conservative, not a complete Notes document-model parser, so
-  make a backup before any override. Appending preserves the existing body
-  rather than rebuilding it.
+  make a backup before any override. Append has no rich-content-loss override:
+  any detected rich kind is rejected because Notes has no true append primitive.
 - **HTML:** HTML writes accept only the documented sanitized, attribute-free
   subset. It cannot preserve arbitrary Notes formatting and is intentionally
   unsuitable for tables, checklists, media, links, embedded content, or a

@@ -42,13 +42,13 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 - [x] Detect rich content on the target note before any whole-body rewrite.
 - [x] Reject `mode: "replace"` on notes carrying rich content by default, with an actionable message naming what would be lost.
 - [x] Gate the override behind an explicit per-call field, not a server-wide flag.
-- [x] Ensure `mode: "append"` concatenates onto the existing body without rebuilding it (verify the current `note.body() + toHtml(body)` path preserves attachments).
+- [x] Fail closed on rich-content append: Notes exposes only whole-body assignment, so attachment preservation cannot be guaranteed. Ordinary-note append concatenates the existing HTML and the escaped or sanitized fragment.
 - [x] Preserve the existing title when `new_title` is absent.
 
 **Acceptance criteria:**
 
 - Replacing the body of a note containing an attachment fails closed by default.
-- Appending to a note containing an attachment leaves the attachment intact.
+- Appending to a note containing an attachment fails before body assignment; ordinary-note append remains available.
 - Tests cover attachment, drawing, table, and checklist fixtures.
 
 ### 3. Close the delete-escalation path — 2 points
