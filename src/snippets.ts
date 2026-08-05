@@ -212,6 +212,102 @@ export const JXA_WRITE_SAFETY = `
     return shared;
   }
 
+  function publicAccountMetadata(Notes, selectedAccountId) {
+    const accounts = Notes.accounts;
+    const ids = accounts.id();
+    const names = accounts.name();
+    const upgraded = accounts.upgraded();
+    const defaultFolderIds = accounts.defaultFolder.id();
+    const index = ids.indexOf(selectedAccountId);
+    if (
+      index === -1 ||
+      names.length !== ids.length ||
+      upgraded.length !== ids.length ||
+      defaultFolderIds.length !== ids.length
+    ) {
+      throw safeError(
+        "ACCOUNT_METADATA_UNAVAILABLE",
+        "Notes did not provide complete public metadata for the selected stable account ID. No trash request was made."
+      );
+    }
+    return {
+      id: ids[index],
+      name: names[index],
+      upgraded: Boolean(upgraded[index]),
+      default_folder_id: defaultFolderIds[index],
+      // Notes.sdef exposes no trustworthy account type or shared-note owner.
+      account_type: "unavailable",
+      ownership: "unknown",
+    };
+  }
+
+  function assertTrashableNote(note, serverAllowsShared, callAllowsSharedTrash, confirmsSharedImpact) {
+    if (Boolean(note.passwordProtected())) {
+      throw safeError("LOCKED_NOTE", "Refusing to trash a locked note. No trash request was made.");
+    }
+    const shared = Boolean(note.shared());
+    if (shared && !serverAllowsShared) {
+      throw safeError(
+        "SHARED_TRASH_DISABLED",
+        "Refusing to trash a shared note unless APPLE_NOTES_ALLOW_SHARED_WRITES=true at server startup. Ownership is unavailable through Notes automation, so collaborator impact cannot be bounded."
+      );
+    }
+    if (shared && !callAllowsSharedTrash) {
+      throw safeError(
+        "SHARED_TRASH_CONFIRMATION_REQUIRED",
+        "Refusing to trash a shared note unless allow_shared_trash=true is supplied for this call. Ownership is unknown and collaborators may lose access."
+      );
+    }
+    if (shared && !confirmsSharedImpact) {
+      throw safeError(
+        "SHARED_TRASH_IMPACT_CONFIRMATION_REQUIRED",
+        "Refusing to trash a shared note unless confirm_shared_impact=true explicitly acknowledges unknown ownership and possible collaborator impact."
+      );
+    }
+    return {
+      is_shared: shared,
+      ownership: "unknown",
+      potential_collaborator_impact: shared
+        ? "The Notes automation API does not expose ownership; trashing may remove collaborator access."
+        : "none_detected",
+    };
+  }
+
+  function resolveRecoverableTrashDestination(Notes, context, accountId, currentFolderId) {
+    const candidates = context.catalog.filter(folder =>
+      context.trashIds.indexOf(folder.id) !== -1 && folder.account.id === accountId
+    );
+    if (candidates.length !== 1) {
+      throw safeError(
+        "TRASH_RECOVERABILITY_UNAVAILABLE",
+        "The selected account does not have exactly one validated stable Recently Deleted destination. No trash request was made."
+      );
+    }
+    const configured = candidates[0];
+    if (configured.id === currentFolderId) {
+      throw safeError(
+        "NOTE_IN_RECENTLY_DELETED",
+        "Refusing to trash a note already in its configured stable Recently Deleted folder; a second delete could permanently erase it."
+      );
+    }
+    // Resolve the stable destination again so stale or no-longer-addressable
+    // configuration fails before the final revision check and mutation.
+    const current = resolveFolderForMutation(Notes, configured.id);
+    if (current.account.id !== accountId || current.id !== configured.id) {
+      throw safeError(
+        "TRASH_RECOVERABILITY_UNAVAILABLE",
+        "The configured Recently Deleted destination no longer belongs to the selected account. No trash request was made."
+      );
+    }
+    if (Boolean(current.folder.shared())) {
+      throw safeError(
+        "TRASH_RECOVERABILITY_UNAVAILABLE",
+        "The configured Recently Deleted destination is unexpectedly shared, so recoverability cannot be established. No trash request was made."
+      );
+    }
+    return current;
+  }
+
   function assertExpectedRevision(Notes, note, id, expectedRevision, context) {
     // Re-resolve stable location immediately before reading modificationDate.
     // This catches folder-only moves even if Notes leaves the date unchanged.
@@ -263,8 +359,12 @@ export const JXA_WRITE_SAFETY = `
     Notes.move(note, { to: destinationFolder });
   }
 
-  function deleteNoteToConfiguredTrash(Notes, note) {
-    Notes.delete(note);
+  function moveNoteToConfiguredTrash(Notes, note, destinationFolder) {
+    // Never use Notes.delete here. Its behavior escalates to permanent erasure
+    // when another actor has already moved the note into Recently Deleted.
+    // Moving to the exact resolved stable destination is idempotent with
+    // respect to that race and either succeeds recoverably or fails closed.
+    Notes.move(note, { to: destinationFolder });
   }
 
   function postWriteVerificationFailure(id, detail) {
@@ -321,6 +421,13 @@ export const JXA_WRITE_SAFETY = `
     }
   }
 
+  function assertPostTrashState(id, previousRevision, expectedTrashFolderId, state) {
+    assertPostWriteRevisionChanged(id, previousRevision, state.revision);
+    if (state.folder.id !== expectedTrashFolderId) {
+      postWriteVerificationFailure(id, "Notes did not verify the exact configured recoverable destination with a new revision.");
+    }
+  }
+
   function authoritativeNoteState(Notes, id, includeBody) {
     const ids = Notes.notes.id();
     if (ids.indexOf(id) === -1) {
@@ -333,7 +440,7 @@ export const JXA_WRITE_SAFETY = `
     const note = Notes.notes.byId(id);
     const initialModified = fullModificationTime(note.modificationDate());
     const name = note.name();
-    // Move/delete verification does not request or expose content, so those
+    // Move/trash verification does not request or expose content, so those
     // callers skip the body property entirely.
     const body = includeBody ? note.body() : null;
     const location = noteIdentityMap(Notes)[id];
@@ -629,45 +736,5 @@ export const JXA_IDENTITY_HELPERS = `
       account: location.account,
       folder: location.folder,
     };
-  }
-`;
-
-// Resolve one mutation target and refuse to issue a second delete when the
-// note is already in a folder matching the configured Recently Deleted name.
-// Folder note ids are fetched in bulk so detection does not add per-note Apple
-// Events. Kept as plain JavaScript for mocked Node tests.
-export const JXA_DELETE_NOTE = `
-  function safeError(code, message) {
-    const error = new Error(message);
-    error.appleNotesSafe = true;
-    error.appleNotesSafeCode = code;
-    return error;
-  }
-
-  function deleteNoteSafely(Notes, target, trashFolderName) {
-    const note = target.note;
-    const noteId = target.id;
-    const trashFolders = Notes.folders.whose({ name: trashFolderName });
-
-    for (let i = 0; i < trashFolders.length; i++) {
-      const trashedIds = trashFolders[i].notes.id();
-      if (trashedIds.indexOf(noteId) !== -1) {
-        throw safeError("ALREADY_TRASHED",
-          "Refusing to delete note '" + note.name() +
-          "': it is already in " + trashFolderName +
-          " and deleting it again could permanently erase it."
-        );
-      }
-    }
-
-    const info = {
-      deleted: true,
-      id: noteId,
-      name: note.name(),
-      account: target.account,
-      folder: target.folder,
-    };
-    Notes.delete(note);
-    return info;
   }
 `;

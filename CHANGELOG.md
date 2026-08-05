@@ -12,9 +12,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `APPLE_NOTES_ALLOW_RAW_HTML=true` startup capability.
 - Collision-free revision tokens covering stable note/account/folder identity
   and full-precision modification time. Update,
-  append, move, and delete now require `expected_revision`, support `dry_run`,
+  append, move, and trash now require `expected_revision`, support `dry_run`,
   and perform authoritative post-write verification.
 - `move_note`, addressed only by full stable note and destination-folder IDs.
+- **Breaking:** `delete_note` is replaced by `trash_note`; no legacy alias or
+  permanent-delete operation is registered. Trashing requires literal
+  `confirm=true`, a current revision, and one validated stable configured
+  Recently Deleted destination in the target account.
 - A separate `APPLE_NOTES_ALLOW_SHARED_WRITES=true` capability gate; every
   shared mutation also requires `allow_shared_note=true` on that call.
 
@@ -27,8 +31,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stale revisions fail with `CONFLICT` immediately before mutation. Locked
   notes, configured-trash targets, and shared writes without both gates fail
   closed.
-- Delete verification now uses configured stable Recently Deleted folder IDs,
-  not a localized folder name.
+- Trash verification now uses configured stable Recently Deleted folder IDs,
+  not a localized folder name. The operation explicitly moves to that folder
+  and never invokes Notes' delete command, avoiding permanent-erasure escalation
+  if another actor moves the note after preflight.
+- Trash preflight reports the public account ID/name/default-folder/`upgraded` metadata and
+  represents account type as unavailable and ownership as unknown because the
+  public Notes scripting dictionary exposes neither trustworthy property.
+  Configured destination identity is reported as workflow evidence, not as an
+  API-provided recovery guarantee.
+- Shared trashing is rejected by default. When the server shared-write
+  capability is enabled it still requires dedicated `allow_shared_trash=true`
+  and `confirm_shared_impact=true` call gates and reports possible collaborator
+  impact; locked, uncovered-account, stale-destination, and already-trashed
+  cases fail before mutation.
 - Errors after a mutation attempt conservatively warn that the change may have
   occurred and require re-reading/listing before any retry.
 

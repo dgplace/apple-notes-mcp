@@ -160,11 +160,11 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** A normal delete request cannot permanently remove a note or unexpectedly affect collaborators. Builds on the immediate fix in section 3.
 
-- [ ] Rename the default operation to `trash_note` and require `confirm: true` plus `expected_revision`.
-- [ ] Determine the note's account type, shared state, ownership, and current folder before deletion.
-- [ ] Reject accounts where Notes does not provide a recoverable Recently Deleted workflow.
-- [ ] Reject shared-note deletion by default; expose the impact when an override is enabled.
-- [ ] Do not implement permanent deletion in the initial release.
+- [x] Rename the default operation to `trash_note` and require `confirm: true` plus `expected_revision`.
+- [x] Determine the note's account type, shared state, ownership, and current folder before deletion.
+- [x] Reject accounts where Notes does not provide a recoverable Recently Deleted workflow.
+- [x] Reject shared-note deletion by default; expose the impact when an override is enabled.
+- [x] Do not implement permanent deletion in the initial release.
 
 **Acceptance criteria:**
 

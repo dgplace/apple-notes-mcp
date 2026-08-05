@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 
-// Full lifecycle against the real Notes.app — creates, edits, and deletes one
+// Full lifecycle against the real Notes.app — creates, edits, and trashes one
 // test note (ending up in Recently Deleted). Opt-in:
 //
 //   npm run test:integration
@@ -44,7 +44,7 @@ function startServer() {
   return { proc, request, notify };
 }
 
-test("lifecycle: create → search → update → get → delete", { skip: !enabled }, async () => {
+test("lifecycle: create → search → update → get → trash", { skip: !enabled }, async () => {
   const { proc, request, notify } = startServer();
   try {
     await request("initialize", {
@@ -89,11 +89,12 @@ test("lifecycle: create → search → update → get → delete", { skip: !enab
     assert.match(note.plaintext, /updated/);
     assert.doesNotMatch(note.plaintext, /original/);
 
-    const deleted = await call("delete_note", {
+    const trashed = await call("trash_note", {
       id: created.id,
       expected_revision: updated.revision,
+      confirm: true,
     });
-    assert.equal(deleted.deleted, true);
+    assert.equal(trashed.trashed, true);
 
     const gone = await call("search_notes", { query: marker });
     assert.equal(gone.notes.length, 0);

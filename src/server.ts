@@ -15,9 +15,10 @@ export const SERVER_INSTRUCTIONS = [
   "Note-bearing reads fail closed until APPLE_NOTES_TRASH_FOLDER_IDS contains exactly one full stable Recently Deleted folder ID for every currently discovered account.",
   "Mutations use read revisions, reject stale updates, support dry-run previews, and verify state after every real write.",
   "Write content defaults to escaped plain text. Raw HTML requires both APPLE_NOTES_ALLOW_RAW_HTML=true and content_format=html, and is restricted to a small attribute-free subset.",
-  "delete_note requests recoverable placement in configured Recently Deleted, but recovery is not guaranteed for every Notes account.",
-  "Detected rich-content replacement is rejected unless allow_rich_content_loss=true, and deleting a note already in Recently Deleted is rejected.",
-  "Writes to locked notes are refused. Shared-note writes require both APPLE_NOTES_ALLOW_SHARED_WRITES=true and allow_shared_note=true on the individual call.",
+  "trash_note requires confirm=true and a current revision, explicitly moves to the validated stable configured Recently Deleted destination, and never invokes Notes' delete command or any permanent-delete operation.",
+  "Notes automation exposes account id, name, default-folder id, and upgraded state, but no trustworthy account type or shared-note ownership; trash previews and results report those facts as unavailable or unknown.",
+  "Detected rich-content replacement is rejected unless allow_rich_content_loss=true, and trashing a note already in Recently Deleted is rejected to prevent permanent erasure.",
+  "Writes to locked notes are refused. Ordinary shared-note writes require APPLE_NOTES_ALLOW_SHARED_WRITES=true plus allow_shared_note=true; shared trashing additionally requires allow_shared_trash=true and confirm_shared_impact=true.",
 ].join(" ");
 
 /** Parse the complete security configuration. Undefined means the secure default. */

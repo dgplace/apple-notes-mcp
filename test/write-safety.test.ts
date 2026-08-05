@@ -9,13 +9,19 @@ import {
 
 const helpers = new Function(
   `function noteIdentityMap(Notes) { return Notes.identityMap; }
+   function resolveFolderForMutation(Notes, id) {
+     const folder = Notes.folderById && Notes.folderById[id];
+     if (!folder) throw safeError("FOLDER_NOT_FOUND", "Folder id not found: " + id);
+     return folder;
+   }
    ${JXA_HTML_HELPERS}\n${JXA_REVISION}\n${JXA_UPDATE_NOTE}\n${JXA_WRITE_SAFETY};
    return { planNoteUpdate, applyNoteUpdate, assertExpectedRevision,
      assertWritableNote, assertWritableFolder, assertLiveMutationTarget,
      authoritativeNoteState, publicVerifiedState, moveNoteToFolder,
-     deleteNoteToConfiguredTrash, executeWritePlan,
+     moveNoteToConfiguredTrash, executeWritePlan, publicAccountMetadata,
+     assertTrashableNote, resolveRecoverableTrashDestination,
      postWriteVerificationFailure, assertPostWriteRevisionChanged,
-     verifyPostWrite, attemptMutation, attemptCreateMutation };`
+     assertPostTrashState, verifyPostWrite, attemptMutation, attemptCreateMutation };`
 )() as Record<string, (...args: any[]) => any>;
 
 function noteFixture(options: { locked?: boolean; shared?: boolean } = {}) {
@@ -58,6 +64,23 @@ test("stale expected revision conflicts before an update can mutate", () => {
   assert.equal(typeof fixture.body(), "function");
   assert.equal(fixture.modificationReads(), 2, "conflict brackets fresh location with revision reads");
   assert.ok(plan.nextBody.includes("new"));
+});
+
+test("stale trash revision makes no Notes move-to-trash request", () => {
+  const fixture = noteFixture();
+  let trashRequests = 0;
+  const Notes = {
+    ...notesFor(fixture.note),
+    move: () => { trashRequests++; },
+  };
+  assert.throws(
+    () => {
+      helpers.assertExpectedRevision(Notes, fixture.note, NOTE_ID, "r2|stale", CONTEXT);
+      helpers.moveNoteToConfiguredTrash(Notes, fixture.note, {});
+    },
+    (error: any) => error.appleNotesSafeCode === "CONFLICT"
+  );
+  assert.equal(trashRequests, 0);
 });
 
 test("matching revision permits the planned append without rebuilding existing HTML", () => {
@@ -113,6 +136,31 @@ test("dry-run executor performs zero mutation", () => {
   assert.equal(result, preview);
 });
 
+test("trash dry-run returns recoverability preview with zero Notes request", () => {
+  const requests: unknown[] = [];
+  const Notes = { move: (...args: unknown[]) => requests.push(args) };
+  const preview = {
+    dry_run: true,
+    preview: {
+      operation: "trash",
+      target: { id: NOTE_ID, account: LOCATION.account, folder: LOCATION.folder },
+      current_revision: "r2|current",
+      recoverability: {
+        evidence: "APPLE_NOTES_TRASH_FOLDER_IDS",
+        destination: { folder: { id: "x-coredata://A/ICFolder/trash" } },
+      },
+      shared_impact: { is_shared: false, ownership: "unknown" },
+      confirmation: { trash: true, shared_impact: false },
+    },
+  };
+  const result = helpers.executeWritePlan(true, preview, () => {
+    helpers.moveNoteToConfiguredTrash(Notes, {}, {});
+    return { trashed: true };
+  });
+  assert.equal(result, preview);
+  assert.deepEqual(requests, []);
+});
+
 test("locked notes are refused before shared policy is considered", () => {
   const fixture = noteFixture({ locked: true, shared: true });
   assert.throws(
@@ -141,7 +189,7 @@ test("shared writes require both server capability and per-call intent", () => {
   assert.equal(helpers.assertWritableFolder(sharedFolder, true, true), true);
 });
 
-test("stable trash identity refuses update, move, and delete targets", () => {
+test("stable trash identity refuses update, move, and trash targets", () => {
   const target = { folder: { id: "x-coredata://A/ICFolder/trash" } };
   const context = { trashIds: [target.folder.id] };
   assert.throws(
@@ -150,7 +198,7 @@ test("stable trash identity refuses update, move, and delete targets", () => {
   );
 });
 
-test("public JXA move/delete commands receive the exact resolved objects", () => {
+test("ordinary move and trash move use distinct helpers with exact resolved objects", () => {
   const calls: unknown[][] = [];
   const Notes = {
     move: (...args: unknown[]) => calls.push(["move", ...args]),
@@ -159,11 +207,180 @@ test("public JXA move/delete commands receive the exact resolved objects", () =>
   const note = { stable: "note" };
   const folder = { stable: "folder" };
   helpers.moveNoteToFolder(Notes, note, folder);
-  helpers.deleteNoteToConfiguredTrash(Notes, note);
+  helpers.moveNoteToConfiguredTrash(Notes, note, folder);
   assert.deepEqual(calls, [
     ["move", note, { to: folder }],
-    ["delete", note],
+    ["move", note, { to: folder }],
   ]);
+});
+
+test("the JXA safety surface has zero delete primitives and one explicit trash-move shape", () => {
+  assert.equal((JXA_WRITE_SAFETY.match(/Notes\.delete\s*\(/g) ?? []).length, 0);
+  assert.equal(
+    (JXA_WRITE_SAFETY.match(/function moveNoteToConfiguredTrash\s*\(/g) ?? []).length,
+    1
+  );
+  assert.match(
+    JXA_WRITE_SAFETY,
+    /function moveNoteToConfiguredTrash\(Notes, note, destinationFolder\)[\s\S]*?Notes\.move\(note, \{ to: destinationFolder \}\)/
+  );
+  assert.doesNotMatch(JXA_WRITE_SAFETY, /deletePermanently|permanentDelete|emptyTrash/i);
+});
+
+test("a command-time race into trash cannot invoke a permanent-delete primitive", () => {
+  const trashFolder = { id: "x-coredata://A/ICFolder/trash" };
+  const note = { currentFolder: trashFolder };
+  const calls: unknown[][] = [];
+  const Notes = {
+    move: (selected: typeof note, command: { to: typeof trashFolder }) => {
+      // Simulate the note already being at the configured destination when
+      // the command arrives. The explicit move is harmless/idempotent.
+      assert.equal(selected.currentFolder, command.to);
+      calls.push(["move", selected, command]);
+    },
+    delete: () => assert.fail("trash_note must never invoke Notes.delete"),
+  };
+  helpers.moveNoteToConfiguredTrash(Notes, note, trashFolder);
+  assert.deepEqual(calls, [["move", note, { to: trashFolder }]]);
+});
+
+test("trash account metadata exposes only public SDEF facts and honest unknowns", () => {
+  const Notes = {
+    accounts: {
+      id: () => [LOCATION.account.id],
+      name: () => [LOCATION.account.name],
+      upgraded: () => [true],
+      defaultFolder: { id: () => ["x-coredata://A/ICFolder/notes"] },
+    },
+  };
+  assert.deepEqual(helpers.publicAccountMetadata(Notes, LOCATION.account.id), {
+    id: LOCATION.account.id,
+    name: LOCATION.account.name,
+    upgraded: true,
+    default_folder_id: "x-coredata://A/ICFolder/notes",
+    account_type: "unavailable",
+    ownership: "unknown",
+  });
+  assert.throws(
+    () => helpers.publicAccountMetadata(Notes, "x-coredata://missing/ICAccount/p1"),
+    (error: any) => error.appleNotesSafeCode === "ACCOUNT_METADATA_UNAVAILABLE"
+  );
+});
+
+test("locked and shared trash policy fail closed before a trash request", () => {
+  const calls: unknown[] = [];
+  const Notes = { move: (note: unknown) => calls.push(note) };
+  assert.throws(
+    () => helpers.assertTrashableNote(noteFixture({ locked: true, shared: true }).note, true, true, true),
+    (error: any) => error.appleNotesSafeCode === "LOCKED_NOTE"
+  );
+  const shared = noteFixture({ shared: true }).note;
+  assert.throws(
+    () => helpers.assertTrashableNote(shared, false, true, true),
+    (error: any) => error.appleNotesSafeCode === "SHARED_TRASH_DISABLED"
+  );
+  assert.throws(
+    () => helpers.assertTrashableNote(shared, true, false, true),
+    (error: any) => error.appleNotesSafeCode === "SHARED_TRASH_CONFIRMATION_REQUIRED"
+  );
+  assert.throws(
+    () => helpers.assertTrashableNote(shared, true, true, false),
+    (error: any) => error.appleNotesSafeCode === "SHARED_TRASH_IMPACT_CONFIRMATION_REQUIRED"
+  );
+  const impact = helpers.assertTrashableNote(shared, true, true, true);
+  assert.equal(impact.is_shared, true);
+  assert.equal(impact.ownership, "unknown");
+  assert.match(impact.potential_collaborator_impact, /collaborator access/i);
+  assert.deepEqual(calls, [], "policy checks must never issue a trash request");
+});
+
+test("recoverability requires one current stable destination in the same account", () => {
+  const trashId = "x-coredata://A/ICFolder/trash";
+  const trash = {
+    id: trashId,
+    name: "Bin",
+    account: LOCATION.account,
+    folder: { shared: () => false },
+  };
+  const Notes = { folderById: { [trashId]: trash } };
+  const context = { catalog: [trash], trashIds: [trashId] };
+  assert.equal(
+    helpers.resolveRecoverableTrashDestination(
+      Notes,
+      context,
+      LOCATION.account.id,
+      LOCATION.folder.id
+    ),
+    trash
+  );
+  assert.throws(
+    () => helpers.resolveRecoverableTrashDestination(
+      Notes,
+      { catalog: [], trashIds: [trashId] },
+      LOCATION.account.id,
+      LOCATION.folder.id
+    ),
+    (error: any) => error.appleNotesSafeCode === "TRASH_RECOVERABILITY_UNAVAILABLE"
+  );
+  assert.throws(
+    () => helpers.resolveRecoverableTrashDestination(
+      { folderById: {} },
+      context,
+      LOCATION.account.id,
+      LOCATION.folder.id
+    ),
+    (error: any) => error.appleNotesSafeCode === "FOLDER_NOT_FOUND"
+  );
+  assert.throws(
+    () => helpers.resolveRecoverableTrashDestination(
+      Notes,
+      context,
+      LOCATION.account.id,
+      trashId
+    ),
+    (error: any) => error.appleNotesSafeCode === "NOTE_IN_RECENTLY_DELETED"
+  );
+  assert.throws(
+    () => helpers.resolveRecoverableTrashDestination(
+      { folderById: { [trashId]: { ...trash, account: { id: "x-coredata://B/ICAccount/p1", name: "Other" } } } },
+      context,
+      LOCATION.account.id,
+      LOCATION.folder.id
+    ),
+    (error: any) => error.appleNotesSafeCode === "TRASH_RECOVERABILITY_UNAVAILABLE"
+  );
+  assert.throws(
+    () => helpers.resolveRecoverableTrashDestination(
+      { folderById: { [trashId]: { ...trash, folder: { shared: () => true } } } },
+      context,
+      LOCATION.account.id,
+      LOCATION.folder.id
+    ),
+    (error: any) => error.appleNotesSafeCode === "TRASH_RECOVERABILITY_UNAVAILABLE"
+  );
+});
+
+test("trash post-read requires a changed revision at the exact configured destination", () => {
+  const trashId = "x-coredata://A/ICFolder/trash";
+  assert.doesNotThrow(() => helpers.assertPostTrashState(
+    NOTE_ID,
+    "r2|before",
+    trashId,
+    { revision: "r2|after", folder: { id: trashId } }
+  ));
+  for (const state of [
+    { revision: "r2|before", folder: { id: trashId } },
+    { revision: "r2|after", folder: { id: LOCATION.folder.id } },
+  ]) {
+    assert.throws(
+      () => helpers.assertPostTrashState(NOTE_ID, "r2|before", trashId, state),
+      (error: any) => {
+        assert.equal(error.appleNotesSafeCode, "POST_WRITE_VERIFICATION_FAILED");
+        assert.match(error.message, /do not retry blindly/i);
+        return true;
+      }
+    );
+  }
 });
 
 test("authoritative read-back returns verified location and a new full-precision revision", () => {
@@ -284,7 +501,7 @@ test("exceptions after a mutation attempt are converted to conservative retry wa
   );
 });
 
-test("move/delete read-back never fetches or returns note bodies", () => {
+test("move/trash read-back never fetches or returns note bodies", () => {
   const id = "x-coredata://A/ICNote/p1";
   let bodyReads = 0;
   const Notes = {

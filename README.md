@@ -54,7 +54,7 @@ while every currently available mutation receives an explicit Codex prompt:
 command = "npx"
 args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
 env = { APPLE_NOTES_MODE = "read-write", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
-enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "move_note", "delete_note"]
+enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "move_note", "trash_note"]
 default_tools_approval_mode = "auto"
 
 [mcp_servers.apple-notes.tools.create_note]
@@ -66,7 +66,7 @@ approval_mode = "prompt"
 [mcp_servers.apple-notes.tools.move_note]
 approval_mode = "prompt"
 
-[mcp_servers.apple-notes.tools.delete_note]
+[mcp_servers.apple-notes.tools.trash_note]
 approval_mode = "prompt"
 ```
 
@@ -125,7 +125,7 @@ claude mcp add apple-notes -- node /absolute/path/to/apple-notes-mcp/dist/index.
 |----------|---------|---------|
 | `APPLE_NOTES_MODE` | `read-only` | Server-enforced capability mode. The only accepted values are exactly `read-only` and `read-write`; any other present value prevents startup. |
 | `APPLE_NOTES_TRASH_FOLDER_IDS` | unset | Comma-separated full stable `ICFolder` IDs, with exactly one Recently Deleted folder for every currently discovered Notes account. Until the mapping is complete, only `list_folders` is usable. |
-| `APPLE_NOTES_ALLOW_SHARED_WRITES` | `false` | Separate shared-write capability gate. Accepts exactly `true` or `false`; a shared mutation also needs `allow_shared_note=true` on that call. Any other present value prevents startup. |
+| `APPLE_NOTES_ALLOW_SHARED_WRITES` | `false` | Separate shared-write capability gate. Accepts exactly `true` or `false`; an ordinary shared mutation also needs `allow_shared_note=true`. Shared trashing instead needs dedicated `allow_shared_trash=true` and `confirm_shared_impact=true` gates. Any other present value prevents startup. |
 | `APPLE_NOTES_ALLOW_RAW_HTML` | `false` | Separate raw-HTML capability gate. Accepts exactly `true` or `false`; HTML content also needs `content_format=html` on that call and is restricted to the documented attribute-free subset. Any other present value prevents startup. |
 
 Keep raw HTML disabled unless a client genuinely needs it. To enable only the
@@ -173,7 +173,7 @@ APPLE_NOTES_MODE=read-write
 
 For example, a JSON-based MCP configuration uses
 `"env": { "APPLE_NOTES_MODE": "read-write" }`. Also configure the client to
-prompt separately for `create_note`, `update_note`, `move_note`, and `delete_note`; server
+prompt separately for `create_note`, `update_note`, `move_note`, and `trash_note`; server
 write mode alone does not express user intent for an individual operation.
 
 ## Tools
@@ -187,7 +187,7 @@ write mode alone does not express user intent for an individual operation.
 | `create_note` | read-write | Create in an explicitly selected full `folder_id`; `content_format` defaults to `plain`; supports `dry_run` and verifies real writes. |
 | `update_note` | read-write | Conflict-safe replace or append by full `id` plus required `expected_revision`; `content_format` defaults to `plain`; supports `dry_run`, `new_title?`, and the rich/shared per-call gates. |
 | `move_note` | read-write | Conflict-safe move by full note `id`, full destination `folder_id`, and required `expected_revision`; supports `dry_run`. |
-| `delete_note` | read-write | Ask Notes to move an ordinary note to the configured stable Recently Deleted folder. Requires full `id` and `expected_revision`, supports `dry_run`, and verifies the destination. |
+| `trash_note` | read-write | Confirmed request to explicitly move one live note to the one configured stable Recently Deleted folder for its account. Requires full `id`, current `expected_revision`, and literal `confirm=true`; supports zero-mutation `dry_run` and verifies the exact destination/new revision. It never invokes Notes' delete command. |
 
 ### Stable identities
 
@@ -238,7 +238,7 @@ titles.
 
 Every note summary/detail includes a `revision` built from the full stable note,
 account, and folder IDs plus Notes' millisecond-precision modification date. Pass it back unchanged as
-`expected_revision` for update/append, move, or delete. The automation re-reads
+`expected_revision` for update/append, move, or trash. The automation re-reads
 that value immediately before mutation and returns `CONFLICT` without changing
 the note if it is stale. Use `dry_run=true` to validate the same revision and
 see the stable target, projected title/body-size change or destination, and loss
@@ -258,6 +258,21 @@ folders, require both `APPLE_NOTES_ALLOW_SHARED_WRITES=true` at startup and
 no change. Folder identity is part of the token, so a move conflicts even when
 Notes does not advance the note's modification date.
 
+Trashing is stricter. `trash_note` always requires literal `confirm=true`; a
+shared target additionally requires the startup capability,
+`allow_shared_trash=true`, and `confirm_shared_impact=true`. Its dry-run/result
+reports current stable account/folder identity, the configured recoverability
+evidence and destination, shared state, confirmation state, and collaborator
+impact. Notes' public scripting dictionary exposes account ID, name, default
+folder, and `upgraded`, but no trustworthy account type or shared-note owner. The server
+therefore reports `account_type="unavailable"` and `ownership="unknown"`
+instead of inferring them from localized names or Core Data IDs. Configuration
+is evidence only of a stable trash-and-restore workflow; Notes automation does
+not expose a recovery guarantee. Stale, absent, duplicate,
+cross-account, shared, or already-current trash destinations fail before the
+single explicit move-to-trash request. If Notes refuses that move, the server
+fails safely and never falls back to its potentially permanent delete command.
+
 ### Example prompts
 
 - *"List my Apple Notes folders"*
@@ -266,7 +281,7 @@ Notes does not advance the note's modification date.
 - *"Read the note titled 'Meeting agenda'"*
 - *"List my folders, then create a note called 'Groceries' in the Shopping folder I select"*
 - *"Find my Groceries note, then add 'butter' using its full ID"*
-- *"Find Old draft, show me its account and folder, then delete that exact note"*
+- *"Find Old draft, show me its account and folder, preview trashing that exact note, then ask me to confirm"*
 
 ### Notes on written content
 
@@ -306,7 +321,7 @@ src/
   read-policy.ts    hard input/output bounds and pagination
   types.ts          NoteSummary / NoteDetail
   tools/read.ts     list_folders, list_notes, search_notes, get_note
-  tools/write.ts    create_note, update_note, move_note, delete_note
+  tools/write.ts    create_note, update_note, move_note, trash_note
 test/               node:test suites (see below)
 ```
 
@@ -324,9 +339,9 @@ against a fake `osascript`. They need neither Notes.app access nor macOS
 Automation permission.
 
 The integration test drives the built server over real JSON-RPC and exercises
-create → search → update → get → delete. It is opt-in (gated on `APPLE_NOTES_IT=1`,
+create → search → update → get → trash. It is opt-in (gated on `APPLE_NOTES_IT=1`,
 with `APPLE_NOTES_MODE=read-write` set by the script) because it touches your real Notes library; the test note it
-creates is deleted (moved to Recently Deleted) at the end.
+creates is trashed (moved to Recently Deleted) at the end.
 
 You can also smoke-test by piping JSON-RPC to the server:
 
@@ -349,14 +364,16 @@ printf '%s\n' \
   explicit gates, and passes through a strict balanced no-attribute allowlist.
 - Replacing detected attachment, drawing, table, or checklist content is rejected
   unless `allow_rich_content_loss=true` is supplied for that individual call.
-- Every update/move/delete requires the last read `revision`; stale revisions
+- Every update/move/trash requires the last read `revision`; stale revisions
   fail before mutation. Dry runs make no change, and real writes are read back
   and verified before success is returned.
-- `delete_note` refuses notes already in Recently Deleted and verifies an
-  ordinary note reaches the configured stable trash folder. Recovery is still
-  not guaranteed for every account type; section 9 hardens that account policy.
+- `trash_note` requires literal confirmation, refuses locked or already-trashed
+  notes, and fails closed unless one current stable configured destination
+  covers the target account. It issues one explicit move to that resolved
+  folder and verifies the exact destination plus a changed revision. It never
+  invokes `Notes.delete`, including when another actor wins a location race.
 - Folder-name and note-title reads reject multiple matches and return compact
-  candidate full IDs with account/folder identities. Update/delete accept only
+  candidate full IDs with account/folder identities. Update/trash accept only
   full stable note IDs, and create accepts only a full stable folder ID.
 - Short note IDs are display/read conveniences only. A read must prove the
   suffix unique; mutations require the reconstructed full `x-coredata` ID.

@@ -10,6 +10,7 @@ import {
 } from "../snippets.js";
 import { JXA_REVISION } from "../revision.js";
 import { ok, fail } from "../helpers.js";
+import { safeError } from "../errors.js";
 import { parseTrashFolderIds, requireTrashFolderIds } from "../read-policy.js";
 import type { WritePolicy } from "../write-policy.js";
 import {
@@ -60,6 +61,15 @@ const scriptPreamble = `${JXA_SAFE_ERRORS}
   ${JXA_IDENTITY_HELPERS}
   ${JXA_REVISION}
   ${JXA_WRITE_SAFETY}`;
+
+export function requireTrashConfirmation(value: unknown): asserts value is true {
+  if (value !== true) {
+    throw safeError(
+      "TRASH_CONFIRMATION_REQUIRED",
+      "trash_note requires confirm: true. No Apple Notes automation was launched."
+    );
+  }
+}
 
 export function registerWriteTools(server: McpServer, policy: WritePolicy): void {
   const trashFolderIds = parseTrashFolderIds(
@@ -297,7 +307,7 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
               const destination = resolveFolderForMutation(Notes, argv[1]);
               assertLiveMutationTarget(target, context);
               if (trashIds.indexOf(destination.id) !== -1) {
-                throw safeError("FOLDER_IN_RECENTLY_DELETED", "Use delete_note, not move_note, for a Recently Deleted destination.");
+                throw safeError("FOLDER_IN_RECENTLY_DELETED", "Use trash_note, not move_note, for a Recently Deleted destination.");
               }
               const sharedNote = assertWritableNote(target.note, argv[4] === "true", argv[5] === "true");
               const sharedFolder = assertWritableFolder(destination.folder, argv[4] === "true", argv[5] === "true");
@@ -348,19 +358,35 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
   );
 
   server.registerTool(
-    "delete_note",
+    "trash_note",
     {
       description:
-        "Conflict-safe request to move one live note to the configured stable Recently Deleted folder. Supports dry-run and verifies recoverable placement.",
+        "Confirmed, conflict-safe request to move one live note to its account's configured stable Recently Deleted folder. Never permanently deletes; supports dry-run and verifies recoverable placement.",
       inputSchema: {
         id: fullNoteId,
         expected_revision: expectedRevision,
-        allow_shared_note: z.boolean().default(false),
+        confirm: z.literal(true).describe("Must be literal true for every trash request"),
+        allow_shared_trash: z.boolean().default(false).describe(
+          "Dedicated per-call shared-trash gate; also requires the server shared-write capability"
+        ),
+        confirm_shared_impact: z.boolean().default(false).describe(
+          "For a shared note, acknowledge unknown ownership and possible collaborator impact"
+        ),
         dry_run: z.boolean().default(false),
       },
     },
-    async ({ id, expected_revision, allow_shared_note, dry_run }) => {
+    async ({
+      id,
+      expected_revision,
+      confirm,
+      allow_shared_trash,
+      confirm_shared_impact,
+      dry_run,
+    }) => {
       try {
+        // This check is intentionally independent of the schema boundary so
+        // direct/internal invocation cannot launch JXA without confirmation.
+        requireTrashConfirmation(confirm);
         requireTrashFolderIds(trashFolderIds);
         const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
           function run(argv) {
@@ -370,36 +396,61 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
               const context = writeCatalogContext(Notes, trashIds);
               const target = resolveNoteForMutation(Notes, argv[0]);
               assertLiveMutationTarget(target, context);
-              const shared = assertWritableNote(target.note, argv[3] === "true", argv[4] === "true");
+              const accountMetadata = publicAccountMetadata(Notes, target.account.id);
+              const sharedImpact = assertTrashableNote(
+                target.note,
+                argv[3] === "true",
+                argv[4] === "true",
+                argv[5] === "true"
+              );
               const existingName = target.note.name();
+              const trash = resolveRecoverableTrashDestination(
+                Notes,
+                context,
+                target.account.id,
+                target.folder.id
+              );
+              // This is the final Notes property read before a real mutation.
               const current = assertExpectedRevision(Notes, target.note, target.id, argv[1], context);
-              const trash = context.catalog.filter(folder =>
-                trashIds.indexOf(folder.id) !== -1 && folder.account.id === current.location.account.id
-              )[0];
-              if (!trash) {
-                throw safeError("TRASH_CONFIG_INCOMPLETE", "No configured stable Recently Deleted folder covers the selected note account.");
+              if (
+                current.location.account.id !== target.account.id ||
+                current.location.folder.id !== target.folder.id ||
+                trash.account.id !== current.location.account.id
+              ) {
+                throw safeError("CONFLICT", "The note location changed during trash preflight. Re-read it before retrying.");
               }
+              const recoverability = {
+                policy: "configured_stable_recently_deleted",
+                evidence: "APPLE_NOTES_TRASH_FOLDER_IDS",
+                account_match: true,
+                recovery_guarantee: "unavailable_from_notes_automation",
+                destination: { account: trash.account, folder: { id: trash.id, name: trash.name } },
+              };
               const preview = {
                   dry_run: true,
                   preview: {
-                    operation: "delete",
+                    operation: "trash",
                     target: { id: target.id, name: existingName, account: current.location.account, folder: current.location.folder },
                     current_revision: current.revision,
-                    projected: { destination: { account: trash.account, folder: { id: trash.id, name: trash.name } } },
-                    loss_flags: { rich_content_loss: false, shared: shared, permanent_deletion: false },
+                    account_metadata: accountMetadata,
+                    recoverability: recoverability,
+                    shared_impact: sharedImpact,
+                    confirmation: { trash: true, shared_impact: argv[5] === "true" },
+                    projected: { state: "trashed", destination: recoverability.destination },
+                    loss_flags: { rich_content_loss: false, shared: sharedImpact.is_shared, permanent_deletion: false },
                   },
                 };
-              return executeWritePlan(argv[5] === "true", preview, () => {
+              return executeWritePlan(argv[6] === "true", preview, () => {
                 return attemptMutation(target.id, () => {
-                  deleteNoteToConfiguredTrash(Notes, target.note);
+                  moveNoteToConfiguredTrash(Notes, target.note, trash.folder);
                   const state = verifyPostWrite(target.id, () => authoritativeNoteState(Notes, target.id, false));
-                  assertPostWriteRevisionChanged(target.id, current.revision, state.revision);
-                  if (state.folder.id !== trash.id) {
-                    postWriteVerificationFailure(target.id, "Notes did not verify recoverable placement with a new revision.");
-                  }
+                  assertPostTrashState(target.id, current.revision, trash.id, state);
                   return Object.assign(publicVerifiedState(state), {
-                    operation: "delete",
-                    deleted: true,
+                    operation: "trash",
+                    trashed: true,
+                    account_metadata: accountMetadata,
+                    recoverability: Object.assign({ destination_verified: true }, recoverability),
+                    shared_impact: sharedImpact,
                     post_write: publicVerifiedState(state),
                   });
                 });
@@ -410,7 +461,8 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
           expected_revision,
           JSON.stringify(trashFolderIds),
           String(policy.allowSharedWrites),
-          String(allow_shared_note),
+          String(allow_shared_trash),
+          String(confirm_shared_impact),
           String(dry_run),
         ]);
         return ok(result);

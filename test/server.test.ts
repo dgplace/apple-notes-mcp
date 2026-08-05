@@ -12,6 +12,7 @@ import {
   parseAllowRawHtml,
   parseAllowSharedWrites,
 } from "../src/write-policy.js";
+import { requireTrashConfirmation } from "../src/tools/write.js";
 
 interface RpcResponse {
   jsonrpc: "2.0";
@@ -23,7 +24,7 @@ interface RpcResponse {
       name: string;
       inputSchema?: {
         required?: string[];
-        properties?: Record<string, { pattern?: string; default?: unknown; enum?: unknown[] }>;
+        properties?: Record<string, { pattern?: string; default?: unknown; enum?: unknown[]; const?: unknown }>;
       };
     }[];
     isError?: boolean;
@@ -219,7 +220,7 @@ test("read-write startup advertises the complete tool surface", async () => {
     "create_note",
     "update_note",
     "move_note",
-    "delete_note",
+    "trash_note",
   ]);
 });
 
@@ -232,7 +233,8 @@ test("mutation schemas require stable full folder/note ids and expose no name se
     const create = tools.find((tool) => tool.name === "create_note")?.inputSchema;
     const update = tools.find((tool) => tool.name === "update_note")?.inputSchema;
     const move = tools.find((tool) => tool.name === "move_note")?.inputSchema;
-    const remove = tools.find((tool) => tool.name === "delete_note")?.inputSchema;
+    const trash = tools.find((tool) => tool.name === "trash_note")?.inputSchema;
+    assert.equal(tools.some((tool) => tool.name === "delete_note"), false);
 
     assert.ok(create?.required?.includes("folder_id"));
     assert.deepEqual(Object.keys(create?.properties ?? {}).sort(), [
@@ -242,13 +244,23 @@ test("mutation schemas require stable full folder/note ids and expose no name se
     assert.equal(create?.properties?.content_format?.default, "plain");
     assert.deepEqual(create?.properties?.content_format?.enum, ["plain", "html"]);
 
-    for (const schema of [update, move, remove]) {
+    for (const schema of [update, move, trash]) {
       assert.ok(schema?.required?.includes("id"));
       assert.ok(schema?.required?.includes("expected_revision"));
       assert.ok(!("title" in (schema?.properties ?? {})));
       assert.match(schema?.properties?.id?.pattern ?? "", /ICNote/);
     }
     assert.ok(move?.required?.includes("folder_id"));
+    assert.ok(trash?.required?.includes("confirm"));
+    assert.deepEqual(trash?.properties?.confirm?.const, true);
+    assert.deepEqual(Object.keys(trash?.properties ?? {}).sort(), [
+      "allow_shared_trash",
+      "confirm",
+      "confirm_shared_impact",
+      "dry_run",
+      "expected_revision",
+      "id",
+    ]);
     assert.equal(update?.properties?.content_format?.default, "plain");
     assert.deepEqual(update?.properties?.content_format?.enum, ["plain", "html"]);
   } finally {
@@ -275,7 +287,7 @@ test("invalid mutation identifiers are rejected by schema before JXA can run", a
     const calls = [
       { name: "create_note", arguments: { title: "x", body: "", folder: "Work" } },
       { name: "update_note", arguments: { id: "p1", body: "x" } },
-      { name: "delete_note", arguments: { id: "p1" } },
+      { name: "trash_note", arguments: { id: "p1", confirm: true } },
     ];
     for (const call of calls) {
       const response = await server.request("tools/call", call);
@@ -290,7 +302,7 @@ test("invalid mutation identifiers are rejected by schema before JXA can run", a
   }
 });
 
-test("update, move, and delete reject missing revisions before JXA can run", async () => {
+test("update, move, and trash reject missing revisions before JXA can run", async () => {
   const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-revision-no-jxa-"));
   const marker = join(fakeBin, "jxa-launched");
   const fakeOsascript = join(fakeBin, "osascript");
@@ -309,12 +321,65 @@ test("update, move, and delete reject missing revisions before JXA can run", asy
     for (const call of [
       { name: "update_note", arguments: { id: "x-coredata://A/ICNote/p1", body: "x" } },
       { name: "move_note", arguments: { id: "x-coredata://A/ICNote/p1", folder_id: "x-coredata://A/ICFolder/work" } },
-      { name: "delete_note", arguments: { id: "x-coredata://A/ICNote/p1" } },
+      { name: "trash_note", arguments: { id: "x-coredata://A/ICNote/p1", confirm: true } },
     ]) {
       const response = await server.request("tools/call", call);
       assert.equal(response.result?.isError, true);
       assert.match(response.result?.content?.[0]?.text ?? "", /expected_revision/i);
     }
+    await assert.rejects(access(marker), { code: "ENOENT" });
+  } finally {
+    await server.stop();
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("trash confirmation is literal true at schema and runtime boundaries with no JXA", async () => {
+  for (const value of [undefined, false, "true", 1]) {
+    assert.throws(
+      () => requireTrashConfirmation(value),
+      (error: any) => error.code === "TRASH_CONFIRMATION_REQUIRED"
+    );
+  }
+  assert.doesNotThrow(() => requireTrashConfirmation(true));
+
+  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-trash-confirm-no-jxa-"));
+  const marker = join(fakeBin, "jxa-launched");
+  const fakeOsascript = join(fakeBin, "osascript");
+  await writeFile(
+    fakeOsascript,
+    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nexit 99\n'
+  );
+  await chmod(fakeOsascript, 0o755);
+  const server = startServer("read-write", {
+    PATH: fakeBin,
+    APPLE_NOTES_JXA_MARKER: marker,
+    APPLE_NOTES_TRASH_FOLDER_IDS: "x-coredata://A/ICFolder/trash",
+  });
+  try {
+    await initialize(server);
+    for (const args of [
+      { id: "x-coredata://A/ICNote/p1", expected_revision: "r2|stale" },
+      { id: "x-coredata://A/ICNote/p1", expected_revision: "r2|stale", confirm: false },
+      { id: "x-coredata://A/ICNote/p1", expected_revision: "r2|stale", confirm: "true" },
+    ]) {
+      const response = await server.request("tools/call", {
+        name: "trash_note",
+        arguments: args,
+      });
+      assert.equal(response.result?.isError, true);
+      assert.match(response.result?.content?.[0]?.text ?? "", /confirm|true/i);
+    }
+    const legacy = await server.request("tools/call", {
+      name: "delete_note",
+      arguments: {
+        id: "x-coredata://A/ICNote/p1",
+        expected_revision: "r2|stale",
+        confirm: true,
+      },
+    });
+    assert.equal(legacy.result?.isError, true);
+    assert.match(legacy.result?.content?.[0]?.text ?? "", /Tool delete_note not found/);
     await assert.rejects(access(marker), { code: "ENOENT" });
   } finally {
     await server.stop();
@@ -330,9 +395,12 @@ test("initialize returns version 2.0.0 and the security boundary instructions", 
     assert.equal(response.result?.instructions, SERVER_INSTRUCTIONS);
     assert.match(response.result?.instructions ?? "", /model provider/i);
     assert.match(response.result?.instructions ?? "", /explicit user approval/i);
-    assert.match(response.result?.instructions ?? "", /recovery is not guaranteed/i);
+    assert.match(response.result?.instructions ?? "", /never invokes Notes' delete command.*permanent-delete operation/i);
+    assert.match(response.result?.instructions ?? "", /account type.*ownership.*unavailable or unknown/i);
+    assert.match(response.result?.instructions ?? "", /confirm=true/i);
     assert.match(response.result?.instructions ?? "", /locked notes/i);
     assert.match(response.result?.instructions ?? "", /shared-note writes/i);
+    assert.match(response.result?.instructions ?? "", /confirm_shared_impact=true/i);
     assert.match(response.result?.instructions ?? "", /rich-content replacement/i);
     assert.match(response.result?.instructions ?? "", /raw html/i);
   } finally {
@@ -500,7 +568,7 @@ test("direct stale write calls in read-only mode are rejected without launching 
   });
   try {
     await initialize(server);
-    for (const name of ["create_note", "update_note", "move_note", "delete_note"]) {
+    for (const name of ["create_note", "update_note", "move_note", "trash_note", "delete_note"]) {
       const response = await server.request("tools/call", {
         name,
         arguments: {},
