@@ -29,6 +29,7 @@ export interface NoteSummary extends NoteLocation {
   id: string;
   name: string;
   modified: string;
+  revision: string;
   locked: boolean;
   shared: boolean;
   rich_content: SummaryRichContent;
@@ -38,6 +39,7 @@ export interface NoteDetail extends NoteLocation {
   id: string;
   name: string;
   modified: string;
+  revision: string;
   locked: boolean;
   shared: boolean;
   created: string;

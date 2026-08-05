@@ -24,6 +24,7 @@ import {
   type PageRequest,
 } from "../read-policy.js";
 import { safeError } from "../errors.js";
+import { JXA_REVISION, revisionToken } from "../revision.js";
 import type {
   EntityIdentity,
   NoteDetail,
@@ -53,6 +54,7 @@ interface NoteMetadata {
   ids: string[];
   names: string[];
   modified: string[];
+  revisionModified: string[];
   locked: boolean[];
   shared: boolean[];
   folderIds: string[];
@@ -68,6 +70,7 @@ function validateMetadata(meta: NoteMetadata): void {
   for (const [label, values] of [
     ["names", meta.names],
     ["modified", meta.modified],
+    ["revisionModified", meta.revisionModified],
     ["locked", meta.locked],
     ["shared", meta.shared],
   ] as const) {
@@ -131,6 +134,12 @@ function noteSummaries(meta: NoteMetadata, trashIds: ReadonlySet<string>): NoteS
       account: location.account,
       folder: location.folder,
       modified: meta.modified[index],
+      revision: revisionToken(
+        id,
+        location.account.id,
+        location.folder.id,
+        meta.revisionModified[index]
+      ),
       locked: Boolean(meta.locked[index]),
       shared: Boolean(meta.shared[index]),
       rich_content: summaryRichContent(id, meta.rich),
@@ -143,6 +152,7 @@ function noteMetadataScript(): string {
   return `${JXA_SAFE_ERRORS}
     ${JXA_IDENTITY_HELPERS}
     ${JXA_BULK_RICH_METADATA}
+    ${JXA_REVISION}
     function run(argv) {
       return runSafely(() => {
         const folderId = argv[0];
@@ -190,6 +200,7 @@ function noteMetadataScript(): string {
           ids: indexes.map(index => ids[index]),
           names: indexes.map(index => names[index]),
           modified: indexes.map(index => modified[index].toISOString().slice(0, 19) + "Z"),
+          revisionModified: indexes.map(index => fullModificationTime(modified[index])),
           locked: indexes.map(index => locked[index]),
           shared: indexes.map(index => shared[index]),
           folderIds: folderIds,
@@ -425,6 +436,7 @@ export function registerReadTools(server: McpServer): void {
         const note = await runJxa<NoteDetail>(`${JXA_SAFE_ERRORS}
           ${JXA_IDENTITY_HELPERS}
           ${JXA_RICH_CONTENT}
+          ${JXA_REVISION}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
@@ -433,20 +445,14 @@ export function registerReadTools(server: McpServer): void {
               validateTrashFolderIdsForRead(catalog, Notes.accounts.id(), trashIds);
               const target = resolveNoteForRead(Notes, argv[0], argv[1], trashIds);
               const selected = target.note;
+              const initialModified = fullModificationTime(selected.modificationDate());
               const locked = Boolean(selected.passwordProtected());
               const shared = Boolean(selected.shared());
-              const base = {
-                id: target.id,
-                name: selected.name(),
-                account: target.account,
-                folder: target.folder,
-                created: selected.creationDate().toISOString().slice(0, 19) + "Z",
-                modified: selected.modificationDate().toISOString().slice(0, 19) + "Z",
-                locked: locked,
-                shared: shared,
-              };
+              const name = selected.name();
+              const created = selected.creationDate().toISOString().slice(0, 19) + "Z";
+              let content;
               if (locked) {
-                return Object.assign(base, {
+                content = {
                   content_available: false,
                   unavailable_reason: "locked",
                   rich_content: {
@@ -454,34 +460,59 @@ export function registerReadTools(server: McpServer): void {
                     unknown_kinds: ["attachment", "drawing", "table", "checklist"],
                   },
                   page: { offset: Number(argv[3]), returned_chars: 0, truncated: false },
-                });
+                };
+              } else {
+                // Inspect and page only the explicitly selected note. The full
+                // plaintext/body never appears in osascript stdout.
+                const start = Number(argv[3]);
+                const maxChars = Number(argv[4]);
+                const plaintext = selected.plaintext() || "";
+                const html = selected.body() || "";
+                const kinds = richContentKinds(selected, html);
+                const pageText = plaintext.slice(start, start + maxChars);
+                const next = start + pageText.length;
+                const truncated = next < plaintext.length;
+                content = {
+                  content_available: true,
+                  plaintext: pageText,
+                  rich_content: {
+                    status: kinds.length > 0 ? "present" : "none",
+                    ...(kinds.length > 0 ? { kinds: kinds } : {}),
+                  },
+                  page: {
+                    offset: start,
+                    returned_chars: pageText.length,
+                    total_chars: plaintext.length,
+                    truncated: truncated,
+                    ...(truncated ? { next_offset: next } : {}),
+                  },
+                };
               }
 
-              // Inspect and page only the explicitly selected note. The full
-              // plaintext/body never appears in osascript stdout.
-              const start = Number(argv[3]);
-              const maxChars = Number(argv[4]);
-              const plaintext = selected.plaintext() || "";
-              const html = selected.body() || "";
-              const kinds = richContentKinds(selected, html);
-              const pageText = plaintext.slice(start, start + maxChars);
-              const next = start + pageText.length;
-              const truncated = next < plaintext.length;
-              return Object.assign(base, {
-                content_available: true,
-                plaintext: pageText,
-                rich_content: {
-                  status: kinds.length > 0 ? "present" : "none",
-                  ...(kinds.length > 0 ? { kinds: kinds } : {}),
-                },
-                page: {
-                  offset: start,
-                  returned_chars: pageText.length,
-                  total_chars: plaintext.length,
-                  truncated: truncated,
-                  ...(truncated ? { next_offset: next } : {}),
-                },
-              });
+              // Re-observe location and modification time after content. If
+              // either changed, refuse to pair stale content with a newer
+              // revision; the caller can retry the read conservatively.
+              const finalLocation = noteIdentityMap(Notes)[target.id];
+              const finalModified = fullModificationTime(selected.modificationDate());
+              const observedRevision = consistentReadRevision(
+                target.id,
+                { account: target.account, folder: target.folder },
+                initialModified,
+                finalLocation,
+                finalModified,
+                trashIds
+              );
+              return Object.assign({
+                id: target.id,
+                name: name,
+                account: finalLocation.account,
+                folder: finalLocation.folder,
+                created: created,
+                modified: finalModified.slice(0, 19) + "Z",
+                revision: observedRevision,
+                locked: locked,
+                shared: shared,
+              }, content);
             });
           }
         `, [

@@ -92,6 +92,7 @@ test("body pages shrink for escaped-byte expansion and expose an exact continuat
     folder: { id: "x-coredata://A/ICFolder/p1", name: "Notes" },
     created: "2026-01-01T00:00:00Z",
     modified: "2026-01-01T00:00:00Z",
+    revision: "r2|note|account|folder|time",
     locked: false,
     shared: false,
     rich_content: { status: "none" },

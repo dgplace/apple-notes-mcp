@@ -127,12 +127,12 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** Users can create or edit ordinary notes without overwriting newer changes.
 
-- [ ] Return a revision token derived from stable identity and modification time.
-- [ ] Require `expected_revision` for update, append, move, and delete operations.
-- [ ] Re-read the revision immediately before mutation and return a conflict on mismatch.
-- [ ] Add a dry-run/preview response showing the target, operation, and projected change.
-- [ ] Reject writes to locked notes and gate shared-note writes behind a separate opt-in.
-- [ ] Return the new revision and verified post-write state after a successful mutation.
+- [x] Return a revision token derived from stable identity and modification time.
+- [x] Require `expected_revision` for update, append, move, and delete operations.
+- [x] Re-read the revision immediately before mutation and return a conflict on mismatch.
+- [x] Add a dry-run/preview response showing the target, operation, and projected change.
+- [x] Reject writes to locked notes and gate shared-note writes behind a separate opt-in.
+- [x] Return the new revision and verified post-write state after a successful mutation.
 
 **Acceptance criteria:**
 

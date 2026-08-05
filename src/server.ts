@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerReadTools } from "./tools/read.js";
 import { registerWriteTools } from "./tools/write.js";
+import type { WritePolicy } from "./write-policy.js";
 
 export const SERVER_VERSION = "2.0.0";
 
@@ -12,9 +13,10 @@ export const SERVER_INSTRUCTIONS = [
   "Write tools are available only with APPLE_NOTES_MODE=read-write and every mutation requires explicit user approval in the MCP client.",
   "Mutations require full stable folder or note IDs from discovery; names and shortened note IDs are read-only selectors and ambiguity is rejected.",
   "Note-bearing reads fail closed until APPLE_NOTES_TRASH_FOLDER_IDS contains exactly one full stable Recently Deleted folder ID for every currently discovered account.",
-  "delete_note asks Notes to move an ordinary note to Recently Deleted, but recovery is not guaranteed for every account or shared-note case.",
+  "Mutations use read revisions, reject stale updates, support dry-run previews, and verify state after every real write.",
+  "delete_note requests recoverable placement in configured Recently Deleted, but recovery is not guaranteed for every Notes account.",
   "Detected rich-content replacement is rejected unless allow_rich_content_loss=true, and deleting a note already in Recently Deleted is rejected.",
-  "Locked notes may be rejected by Notes, while shared-note writes are not yet independently gated; do not mutate either without confirming the risk.",
+  "Writes to locked notes are refused. Shared-note writes require both APPLE_NOTES_ALLOW_SHARED_WRITES=true and allow_shared_note=true on the individual call.",
 ].join(" ");
 
 /** Parse the complete security configuration. Undefined means the secure default. */
@@ -27,7 +29,10 @@ export function parseAppleNotesMode(value: string | undefined): AppleNotesMode {
   );
 }
 
-export function createAppleNotesServer(mode: AppleNotesMode): McpServer {
+export function createAppleNotesServer(
+  mode: AppleNotesMode,
+  writePolicy: WritePolicy = { allowSharedWrites: false }
+): McpServer {
   const server = new McpServer(
     {
       name: "apple-notes",
@@ -37,7 +42,7 @@ export function createAppleNotesServer(mode: AppleNotesMode): McpServer {
   );
 
   registerReadTools(server);
-  if (mode === "read-write") registerWriteTools(server);
+  if (mode === "read-write") registerWriteTools(server, writePolicy);
 
   return server;
 }

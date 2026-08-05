@@ -8,6 +8,7 @@ import {
   parseAppleNotesMode,
   SERVER_INSTRUCTIONS,
 } from "../src/server.js";
+import { parseAllowSharedWrites } from "../src/write-policy.js";
 
 interface RpcResponse {
   jsonrpc: "2.0";
@@ -214,6 +215,7 @@ test("read-write startup advertises the complete tool surface", async () => {
     "get_note",
     "create_note",
     "update_note",
+    "move_note",
     "delete_note",
   ]);
 });
@@ -226,17 +228,22 @@ test("mutation schemas require stable full folder/note ids and expose no name se
     const tools = response.result?.tools ?? [];
     const create = tools.find((tool) => tool.name === "create_note")?.inputSchema;
     const update = tools.find((tool) => tool.name === "update_note")?.inputSchema;
+    const move = tools.find((tool) => tool.name === "move_note")?.inputSchema;
     const remove = tools.find((tool) => tool.name === "delete_note")?.inputSchema;
 
     assert.ok(create?.required?.includes("folder_id"));
-    assert.deepEqual(Object.keys(create?.properties ?? {}).sort(), ["body", "folder_id", "title"]);
+    assert.deepEqual(Object.keys(create?.properties ?? {}).sort(), [
+      "allow_shared_note", "body", "dry_run", "folder_id", "title"
+    ]);
     assert.match(create?.properties?.folder_id?.pattern ?? "", /ICFolder/);
 
-    for (const schema of [update, remove]) {
+    for (const schema of [update, move, remove]) {
       assert.ok(schema?.required?.includes("id"));
+      assert.ok(schema?.required?.includes("expected_revision"));
       assert.ok(!("title" in (schema?.properties ?? {})));
       assert.match(schema?.properties?.id?.pattern ?? "", /ICNote/);
     }
+    assert.ok(move?.required?.includes("folder_id"));
   } finally {
     await server.stop();
   }
@@ -276,6 +283,38 @@ test("invalid mutation identifiers are rejected by schema before JXA can run", a
   }
 });
 
+test("update, move, and delete reject missing revisions before JXA can run", async () => {
+  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-revision-no-jxa-"));
+  const marker = join(fakeBin, "jxa-launched");
+  const fakeOsascript = join(fakeBin, "osascript");
+  await writeFile(
+    fakeOsascript,
+    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nexit 99\n'
+  );
+  await chmod(fakeOsascript, 0o755);
+  const server = startServer("read-write", {
+    PATH: fakeBin,
+    APPLE_NOTES_JXA_MARKER: marker,
+    APPLE_NOTES_TRASH_FOLDER_IDS: "x-coredata://A/ICFolder/trash",
+  });
+  try {
+    await initialize(server);
+    for (const call of [
+      { name: "update_note", arguments: { id: "x-coredata://A/ICNote/p1", body: "x" } },
+      { name: "move_note", arguments: { id: "x-coredata://A/ICNote/p1", folder_id: "x-coredata://A/ICFolder/work" } },
+      { name: "delete_note", arguments: { id: "x-coredata://A/ICNote/p1" } },
+    ]) {
+      const response = await server.request("tools/call", call);
+      assert.equal(response.result?.isError, true);
+      assert.match(response.result?.content?.[0]?.text ?? "", /expected_revision/i);
+    }
+    await assert.rejects(access(marker), { code: "ENOENT" });
+  } finally {
+    await server.stop();
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
 test("initialize returns version 2.0.0 and the security boundary instructions", async () => {
   const server = startServer(undefined);
   try {
@@ -291,6 +330,23 @@ test("initialize returns version 2.0.0 and the security boundary instructions", 
   } finally {
     await server.stop();
   }
+});
+
+test("shared-write capability parser is exact and fails closed", () => {
+  assert.equal(parseAllowSharedWrites(undefined), false);
+  assert.equal(parseAllowSharedWrites("false"), false);
+  assert.equal(parseAllowSharedWrites("true"), true);
+  for (const value of ["", "TRUE", " true", "1"]) {
+    assert.throws(() => parseAllowSharedWrites(value), /Invalid APPLE_NOTES_ALLOW_SHARED_WRITES/);
+  }
+});
+
+test("invalid shared-write configuration exits before startup", async () => {
+  const server = startServer("read-write", { APPLE_NOTES_ALLOW_SHARED_WRITES: "TRUE" });
+  const { code } = await server.exited;
+  assert.notEqual(code, 0);
+  assert.match(server.stderr(), /Invalid APPLE_NOTES_ALLOW_SHARED_WRITES "TRUE"/);
+  assert.doesNotMatch(server.stderr(), /server running on stdio/);
 });
 
 test("invalid case-mismatched mode exits before startup with a clear error", async () => {
@@ -320,7 +376,7 @@ test("direct stale write calls in read-only mode are rejected without launching 
   });
   try {
     await initialize(server);
-    for (const name of ["create_note", "update_note", "delete_note"]) {
+    for (const name of ["create_note", "update_note", "move_note", "delete_note"]) {
       const response = await server.request("tools/call", {
         name,
         arguments: {},
@@ -417,6 +473,7 @@ test("partial multi-account trash configuration is not ready and blocks reads", 
     ids: [],
     names: [],
     modified: [],
+    revisionModified: [],
     locked: [],
     shared: [],
     folderIds: [trashA, trashB],

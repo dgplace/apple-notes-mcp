@@ -54,13 +54,16 @@ while every currently available mutation receives an explicit Codex prompt:
 command = "npx"
 args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
 env = { APPLE_NOTES_MODE = "read-write", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
-enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "delete_note"]
+enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "move_note", "delete_note"]
 default_tools_approval_mode = "auto"
 
 [mcp_servers.apple-notes.tools.create_note]
 approval_mode = "prompt"
 
 [mcp_servers.apple-notes.tools.update_note]
+approval_mode = "prompt"
+
+[mcp_servers.apple-notes.tools.move_note]
 approval_mode = "prompt"
 
 [mcp_servers.apple-notes.tools.delete_note]
@@ -122,7 +125,7 @@ claude mcp add apple-notes -- node /absolute/path/to/apple-notes-mcp/dist/index.
 |----------|---------|---------|
 | `APPLE_NOTES_MODE` | `read-only` | Server-enforced capability mode. The only accepted values are exactly `read-only` and `read-write`; any other present value prevents startup. |
 | `APPLE_NOTES_TRASH_FOLDER_IDS` | unset | Comma-separated full stable `ICFolder` IDs, with exactly one Recently Deleted folder for every currently discovered Notes account. Until the mapping is complete, only `list_folders` is usable. |
-| `APPLE_NOTES_TRASH_FOLDER` | `Recently Deleted` | Legacy write-side safety setting used only by `delete_note`; read tools never make a localized-name decision. |
+| `APPLE_NOTES_ALLOW_SHARED_WRITES` | `false` | Separate shared-write capability gate. Accepts exactly `true` or `false`; a shared mutation also needs `allow_shared_note=true` on that call. Any other present value prevents startup. |
 
 Set it in your MCP client config, e.g. for Claude Desktop:
 
@@ -161,7 +164,7 @@ APPLE_NOTES_MODE=read-write
 
 For example, a JSON-based MCP configuration uses
 `"env": { "APPLE_NOTES_MODE": "read-write" }`. Also configure the client to
-prompt separately for `create_note`, `update_note`, and `delete_note`; server
+prompt separately for `create_note`, `update_note`, `move_note`, and `delete_note`; server
 write mode alone does not express user intent for an individual operation.
 
 ## Tools
@@ -172,9 +175,10 @@ write mode alone does not express user intent for an individual operation.
 | `list_notes` | read-only, read-write | List metadata newest first. Params: `folder_id?`, unique `folder?`, `limit` (hard-capped at 100), `offset`; returns continuation metadata. |
 | `search_notes` | read-only, read-write | Notes-side case-insensitive title/body matching that returns metadata only; plaintext is never returned by search. Query length is capped at 256. Params: `query`, `limit`, `offset`, `scope`. |
 | `get_note` | read-only, read-write | Read one selected live note. `max_chars` defaults to 10000 and clamps at 20000; use `offset`/`page.next_offset` to continue. |
-| `create_note` | read-write | Create in an explicitly selected folder. Params: `title`, `body` (plain text or HTML), required full `folder_id` from `list_folders` |
-| `update_note` | read-write | Replace or append by required full note `id`; titles/short ids are rejected. Also accepts `body`, `mode`, `new_title?`, `allow_rich_content_loss` |
-| `delete_note` | read-write | Ask Notes to move an ordinary note to Recently Deleted, addressed by required full note `id` only |
+| `create_note` | read-write | Create in an explicitly selected full `folder_id`; supports `dry_run` and verifies real writes. |
+| `update_note` | read-write | Conflict-safe replace or append by full `id` plus required `expected_revision`; supports `dry_run`, `new_title?`, and the rich/shared per-call gates. |
+| `move_note` | read-write | Conflict-safe move by full note `id`, full destination `folder_id`, and required `expected_revision`; supports `dry_run`. |
+| `delete_note` | read-write | Ask Notes to move an ordinary note to the configured stable Recently Deleted folder. Requires full `id` and `expected_revision`, supports `dry_run`, and verifies the destination. |
 
 ### Stable identities
 
@@ -213,7 +217,7 @@ their accounts.
 Note summaries and details carry the same identity context:
 
 ```json
-{"idPrefix":"x-coredata://A/ICNote/","notes":[{"id":"p42","name":"Plan","account":{"id":"x-coredata://A/ICAccount/p1","name":"iCloud"},"folder":{"id":"x-coredata://A/ICFolder/p2","name":"Work"},"modified":"2026-08-05T01:02:03Z"}]}
+{"idPrefix":"x-coredata://A/ICNote/","notes":[{"id":"p42","name":"Plan","account":{"id":"x-coredata://A/ICAccount/p1","name":"iCloud"},"folder":{"id":"x-coredata://A/ICFolder/p2","name":"Work"},"modified":"2026-08-05T01:02:03Z","revision":"r2|..."}]}
 ```
 
 `idPrefix` is only a compact display encoding. For a mutation, reconstruct the
@@ -222,6 +226,28 @@ full note ID by concatenating `idPrefix` and the displayed `id` (the example is
 and each note already carries its full ID. `get_note` may use a short ID only
 when it uniquely matches one note; mutations never accept shortened IDs or
 titles.
+
+Every note summary/detail includes a `revision` built from the full stable note,
+account, and folder IDs plus Notes' millisecond-precision modification date. Pass it back unchanged as
+`expected_revision` for update/append, move, or delete. The automation re-reads
+that value immediately before mutation and returns `CONFLICT` without changing
+the note if it is stale. Use `dry_run=true` to validate the same revision and
+see the stable target, projected title/body-size change or destination, and loss
+flags without issuing a Notes mutation. Every real write is then read back and
+must match its projected state; the response carries the authoritative new
+`revision` and `post_write.verified=true`.
+
+If Notes reports an error after a mutation was attempted, the server returns
+`POST_WRITE_VERIFICATION_FAILED` and explicitly warns that the change may have
+already occurred. Re-read or list the stable target before deciding what to do;
+never blindly retry, especially after `create_note`, where that could duplicate
+a note.
+
+Locked notes always fail closed. Shared-note writes, and creates in shared
+folders, require both `APPLE_NOTES_ALLOW_SHARED_WRITES=true` at startup and
+`allow_shared_note=true` on the individual call. Leaving either gate off makes
+no change. Folder identity is part of the token, so a move conflicts even when
+Notes does not advance the note's modification date.
 
 ### Example prompts
 
@@ -260,7 +286,7 @@ src/
   read-policy.ts    hard input/output bounds and pagination
   types.ts          NoteSummary / NoteDetail
   tools/read.ts     list_folders, list_notes, search_notes, get_note
-  tools/write.ts    create_note, update_note, delete_note
+  tools/write.ts    create_note, update_note, move_note, delete_note
 test/               node:test suites (see below)
 ```
 
@@ -301,9 +327,12 @@ printf '%s\n' \
 - Note titles and plain-text bodies are HTML-escaped before being written to Notes.
 - Replacing detected attachment, drawing, table, or checklist content is rejected
   unless `allow_rich_content_loss=true` is supplied for that individual call.
-- `delete_note` refuses notes already in Recently Deleted. For ordinary notes it
-  asks Notes to move the note there, but recovery is not guaranteed for every
-  account type or shared-note case.
+- Every update/move/delete requires the last read `revision`; stale revisions
+  fail before mutation. Dry runs make no change, and real writes are read back
+  and verified before success is returned.
+- `delete_note` refuses notes already in Recently Deleted and verifies an
+  ordinary note reaches the configured stable trash folder. Recovery is still
+  not guaranteed for every account type; section 9 hardens that account policy.
 - Folder-name and note-title reads reject multiple matches and return compact
   candidate full IDs with account/folder identities. Update/delete accept only
   full stable note IDs, and create accepts only a full stable folder ID.
@@ -312,9 +341,8 @@ printf '%s\n' \
 - Note-bearing reads require configured stable Recently Deleted folder IDs and
   exclude those IDs from every locale. `get_note` rejects a selected trashed
   note; there is no folder-name override that can bypass this boundary.
-- Locked notes may be rejected by Notes and shared-note writes are not yet
-  independently gated. Do not mutate either without understanding the account
-  and collaboration impact.
+- Locked-note writes are always rejected. Shared writes require the exact
+  server capability flag plus explicit per-call confirmation.
 - Notes access and automation run locally over stdio, but tool results are sent
   to the connected MCP client and may then be sent to its model provider.
 
@@ -364,7 +392,7 @@ faster, in exchange for indexing machinery and a separate stale-data boundary.
 Tool schemas load into the model's context every session; tool results enter it on
 every call. Both are kept deliberately small:
 
-- **Lean schema** — 4 tools by default (7 in read-write mode). Feature-heavy servers
+- **Lean schema** — 4 tools by default (8 in read-write mode). Feature-heavy servers
   ship 15–20+ tools and several times that on every single session.
 - **Compact JSON** — no pretty-printing (~18% smaller).
 - **Factored id prefix** — note ids share a 55-char `x-coredata://UUID/ICNote/`

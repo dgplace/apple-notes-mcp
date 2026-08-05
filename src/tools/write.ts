@@ -2,19 +2,16 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { runJxa } from "../jxa.js";
 import {
-  JXA_DELETE_NOTE,
   JXA_HTML_HELPERS,
   JXA_IDENTITY_HELPERS,
   JXA_SAFE_ERRORS,
   JXA_UPDATE_NOTE,
+  JXA_WRITE_SAFETY,
 } from "../snippets.js";
+import { JXA_REVISION } from "../revision.js";
 import { ok, fail } from "../helpers.js";
-import type { EntityIdentity } from "../types.js";
-
-// The special "Recently Deleted" folder is matched by name, which is localized
-// by macOS. Override it for non-English locales via APPLE_NOTES_TRASH_FOLDER,
-// matching the existing read-tool behavior.
-const TRASH_FOLDER = process.env.APPLE_NOTES_TRASH_FOLDER || "Recently Deleted";
+import { parseTrashFolderIds, requireTrashFolderIds } from "../read-policy.js";
+import type { WritePolicy } from "../write-policy.js";
 
 const fullFolderId = z
   .string()
@@ -30,56 +27,117 @@ const fullNoteId = z
     "id must be a full x-coredata://.../ICNote/... id; short ids and titles are not accepted for mutations"
   );
 
-export function registerWriteTools(server: McpServer): void {
+const expectedRevision = z
+  .string()
+  .max(8_192)
+  .regex(/^r2\|/, "expected_revision must be the revision returned by a read tool");
+
+interface VerifiedWriteResult {
+  id: string;
+  name: string;
+  account: { id: string; name: string };
+  folder: { id: string; name: string };
+  modified: string;
+  revision: string;
+  post_write: {
+    verified: true;
+    id: string;
+    name: string;
+    account: { id: string; name: string };
+    folder: { id: string; name: string };
+    modified: string;
+    revision: string;
+    body_html_chars?: number;
+  };
+}
+
+const scriptPreamble = `${JXA_SAFE_ERRORS}
+  ${JXA_HTML_HELPERS}
+  ${JXA_IDENTITY_HELPERS}
+  ${JXA_REVISION}
+  ${JXA_WRITE_SAFETY}`;
+
+export function registerWriteTools(server: McpServer, policy: WritePolicy): void {
+  const trashFolderIds = parseTrashFolderIds(
+    process.env.APPLE_NOTES_TRASH_FOLDER_IDS
+  );
+
   server.registerTool(
     "create_note",
     {
       description:
-        "Create a note in one explicitly selected folder. Requires the full stable folder_id returned by list_folders.",
+        "Create in one full stable folder id. Supports dry-run; real writes are read back and verified.",
       inputSchema: {
         title: z.string().min(1).describe("Note title"),
         body: z.string().default("").describe("Note body — plain text or HTML"),
         folder_id: fullFolderId.describe("Full stable folder id from list_folders"),
+        dry_run: z.boolean().default(false),
+        allow_shared_note: z.boolean().default(false).describe(
+          "Per-call shared-write confirmation; also requires APPLE_NOTES_ALLOW_SHARED_WRITES=true"
+        ),
       },
     },
-    async ({ title, body, folder_id }) => {
+    async ({ title, body, folder_id, dry_run, allow_shared_note }) => {
       try {
-        const created = await runJxa<{
-          id: string;
-          name: string;
-          account: EntityIdentity;
-          folder: EntityIdentity;
-        }>(
-          `${JXA_SAFE_ERRORS}
-          ${JXA_HTML_HELPERS}
-          ${JXA_IDENTITY_HELPERS}
+        requireTrashFolderIds(trashFolderIds);
+        const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
           function run(argv) {
             return runSafely(() => {
-              const title = argv[0];
-              const body = argv[1];
-              const folderId = argv[2];
               const Notes = Application("Notes");
-
-              // Resolve and validate identity before constructing or pushing a note.
+              const folderId = argv[2];
+              const trashIds = JSON.parse(argv[3]);
+              const serverAllowsShared = argv[4] === "true";
+              const callAllowsShared = argv[5] === "true";
+              const dryRun = argv[6] === "true";
+              const context = writeCatalogContext(Notes, trashIds);
               const target = resolveFolderForMutation(Notes, folderId);
-              const html = "<div><h1>" + escapeHtml(title) + "</h1></div>" + toHtml(body);
-              const note = Notes.Note({ body: html });
-              target.folder.notes.push(note);
+              if (trashIds.indexOf(target.id) !== -1) {
+                throw safeError("FOLDER_IN_RECENTLY_DELETED", "Refusing to create a note in a configured Recently Deleted folder.");
+              }
+              const shared = assertWritableFolder(
+                target.folder,
+                serverAllowsShared,
+                callAllowsShared
+              );
+              const html = "<div><h1>" + escapeHtml(argv[0]) + "</h1></div>" + toHtml(argv[1]);
 
-              return {
-                id: note.id(),
-                name: note.name(),
-                account: target.account,
-                folder: { id: target.id, name: target.name },
-              };
+              const preview = {
+                  dry_run: true,
+                  preview: {
+                    operation: "create",
+                    target: { account: target.account, folder: { id: target.id, name: target.name } },
+                    projected: { title: argv[0], body_input_chars: argv[1].length, body_html_chars: html.length },
+                    loss_flags: { rich_content_loss: false, shared: shared },
+                  },
+                };
+              return executeWritePlan(dryRun, preview, () => {
+                const attempt = { id: "" };
+                return attemptCreateMutation(target.id, argv[0], attempt, () => {
+                  const note = Notes.Note({ body: html });
+                  target.folder.notes.push(note);
+                  attempt.id = note.id();
+                  const state = verifyPostWrite(attempt.id, () => authoritativeNoteState(Notes, attempt.id, true));
+                  if (state.name !== argv[0] || state.body !== html || state.folder.id !== target.id) {
+                    postWriteVerificationFailure(attempt.id, "The created note did not match its requested title, body, and destination.");
+                  }
+                  return Object.assign(publicVerifiedState(state), {
+                    post_write: publicVerifiedState(state),
+                  });
+                });
+              });
             });
-          }
-        `,
-          [title, body, folder_id]
-        );
-        return ok(created);
-      } catch (e) {
-        return fail(e);
+          }`, [
+          title,
+          body,
+          folder_id,
+          JSON.stringify(trashFolderIds),
+          String(policy.allowSharedWrites),
+          String(allow_shared_note),
+          String(dry_run),
+        ]);
+        return ok(result);
+      } catch (error) {
+        return fail(error);
       }
     }
   );
@@ -88,73 +146,178 @@ export function registerWriteTools(server: McpServer): void {
     "update_note",
     {
       description:
-        "Update one Apple Note by its full stable id. Short ids and titles are not accepted for mutations.",
+        "Conflict-safe replace or append by full note id. Requires the latest revision and verifies every real write.",
       inputSchema: {
-        id: fullNoteId.describe(
-          "Full note id. If a list response factored idPrefix, concatenate idPrefix and the displayed id."
-        ),
+        id: fullNoteId,
+        expected_revision: expectedRevision,
         body: z.string().min(1).describe("Content to write — plain text or HTML"),
-        mode: z
-          .enum(["replace", "append"])
-          .default("replace")
-          .describe("'replace' the whole body, or 'append' to the end"),
-        new_title: z
-          .string()
-          .optional()
-          .describe("Rename the note (replace mode only)"),
-        allow_rich_content_loss: z
-          .boolean()
-          .default(false)
-          .describe(
-            "Allow replace to discard attachments and other rich content (per-call, default false)"
-          ),
+        mode: z.enum(["replace", "append"]).default("replace"),
+        new_title: z.string().optional().describe("Rename the note (replace mode only)"),
+        allow_rich_content_loss: z.boolean().default(false),
+        allow_shared_note: z.boolean().default(false),
+        dry_run: z.boolean().default(false),
       },
     },
-    async ({ id, body, mode, new_title, allow_rich_content_loss }) => {
+    async ({
+      id,
+      expected_revision,
+      body,
+      mode,
+      new_title,
+      allow_rich_content_loss,
+      allow_shared_note,
+      dry_run,
+    }) => {
       try {
-        const updated = await runJxa<{
-          id: string;
-          name: string;
-          account: EntityIdentity;
-          folder: EntityIdentity;
-          modified: string;
-        }>(
-          `${JXA_SAFE_ERRORS}
-          ${JXA_HTML_HELPERS}
-          ${JXA_IDENTITY_HELPERS}
+        requireTrashFolderIds(trashFolderIds);
+        const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
           ${JXA_UPDATE_NOTE}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
+              const trashIds = JSON.parse(argv[6]);
+              const context = writeCatalogContext(Notes, trashIds);
               const target = resolveNoteForMutation(Notes, argv[0]);
               const note = target.note;
-              const body = argv[1];
-              const mode = argv[2];
-              const newTitle = argv[3];
-              const allowRichContentLoss = argv[4] === "true";
-
-              updateNoteContent(note, body, mode, newTitle, allowRichContentLoss);
-
-              return {
-                id: target.id,
-                name: note.name(),
-                account: target.account,
-                folder: target.folder,
-                modified: note.modificationDate().toISOString().slice(0, 19) + "Z",
-              };
+              assertLiveMutationTarget(target, context);
+              const shared = assertWritableNote(note, argv[7] === "true", argv[8] === "true");
+              const existingName = note.name();
+              if (argv[3] === "append" && argv[4] !== "") {
+                throw safeError("INVALID_ARGUMENT", "new_title is supported only in replace mode.");
+              }
+              const plan = planNoteUpdate(note, argv[2], argv[3], argv[4], argv[5] === "true");
+              const projectedTitle = plan.projectedTitle === null ? existingName : plan.projectedTitle;
+              const current = assertExpectedRevision(Notes, note, target.id, argv[1], context);
+              const preview = {
+                  dry_run: true,
+                  preview: {
+                    operation: argv[3],
+                    target: { id: target.id, name: existingName, account: current.location.account, folder: current.location.folder },
+                    current_revision: current.revision,
+                    projected: {
+                      title: projectedTitle,
+                      body_input_chars: argv[2].length,
+                      body_html_chars_before: plan.existingBody.length,
+                      body_html_chars_after: plan.nextBody.length,
+                      body_html_chars_change: plan.nextBody.length - plan.existingBody.length,
+                    },
+                    loss_flags: {
+                      rich_content_loss: argv[3] === "replace" && plan.richKinds.length > 0,
+                      rich_content_kinds: plan.richKinds,
+                      shared: shared,
+                    },
+                  },
+                };
+              return executeWritePlan(argv[9] === "true", preview, () => {
+                return attemptMutation(target.id, () => {
+                  applyNoteUpdate(note, plan);
+                  const state = verifyPostWrite(target.id, () => authoritativeNoteState(Notes, target.id, true));
+                  assertPostWriteRevisionChanged(target.id, current.revision, state.revision);
+                  if (
+                    state.body !== plan.nextBody ||
+                    state.name !== projectedTitle ||
+                    state.folder.id !== current.location.folder.id
+                  ) {
+                    postWriteVerificationFailure(target.id, "The updated note did not match the projected title, body, location, and new revision.");
+                  }
+                  return Object.assign(publicVerifiedState(state), {
+                    operation: argv[3],
+                    post_write: publicVerifiedState(state),
+                  });
+                });
+              });
             });
-          }`,
-          [
-            id,
-            body,
-            mode,
-            new_title ?? "",
-            String(allow_rich_content_loss),
-          ]
-        );
-        return ok(updated);
-      } catch (e) {
-        return fail(e);
+          }`, [
+          id,
+          expected_revision,
+          body,
+          mode,
+          new_title ?? "",
+          String(allow_rich_content_loss),
+          JSON.stringify(trashFolderIds),
+          String(policy.allowSharedWrites),
+          String(allow_shared_note),
+          String(dry_run),
+        ]);
+        return ok(result);
+      } catch (error) {
+        return fail(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "move_note",
+    {
+      description:
+        "Move one live note to a full stable destination folder. Requires the latest revision and verifies the destination.",
+      inputSchema: {
+        id: fullNoteId,
+        folder_id: fullFolderId,
+        expected_revision: expectedRevision,
+        allow_shared_note: z.boolean().default(false),
+        dry_run: z.boolean().default(false),
+      },
+    },
+    async ({ id, folder_id, expected_revision, allow_shared_note, dry_run }) => {
+      try {
+        requireTrashFolderIds(trashFolderIds);
+        const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
+          function run(argv) {
+            return runSafely(() => {
+              const Notes = Application("Notes");
+              const trashIds = JSON.parse(argv[3]);
+              const context = writeCatalogContext(Notes, trashIds);
+              const target = resolveNoteForMutation(Notes, argv[0]);
+              const destination = resolveFolderForMutation(Notes, argv[1]);
+              assertLiveMutationTarget(target, context);
+              if (trashIds.indexOf(destination.id) !== -1) {
+                throw safeError("FOLDER_IN_RECENTLY_DELETED", "Use delete_note, not move_note, for a Recently Deleted destination.");
+              }
+              const sharedNote = assertWritableNote(target.note, argv[4] === "true", argv[5] === "true");
+              const sharedFolder = assertWritableFolder(destination.folder, argv[4] === "true", argv[5] === "true");
+              const existingName = target.note.name();
+              const current = assertExpectedRevision(Notes, target.note, target.id, argv[2], context);
+              const preview = {
+                  dry_run: true,
+                  preview: {
+                    operation: "move",
+                    target: { id: target.id, name: existingName, account: current.location.account, folder: current.location.folder },
+                    current_revision: current.revision,
+                    projected: { destination: { account: destination.account, folder: { id: destination.id, name: destination.name } } },
+                    loss_flags: { rich_content_loss: false, shared: sharedNote || sharedFolder },
+                  },
+                };
+              return executeWritePlan(argv[6] === "true", preview, () => {
+                if (current.location.folder.id === destination.id) {
+                  throw safeError("NO_CHANGE", "The note is already in the requested destination folder.");
+                }
+                return attemptMutation(target.id, () => {
+                  moveNoteToFolder(Notes, target.note, destination.folder);
+                  const state = verifyPostWrite(target.id, () => authoritativeNoteState(Notes, target.id, false));
+                  assertPostWriteRevisionChanged(target.id, current.revision, state.revision);
+                  if (state.folder.id !== destination.id) {
+                    postWriteVerificationFailure(target.id, "The moved note's destination and new revision could not be verified.");
+                  }
+                  return Object.assign(publicVerifiedState(state), {
+                    operation: "move",
+                    post_write: publicVerifiedState(state),
+                  });
+                });
+              });
+            });
+          }`, [
+          id,
+          folder_id,
+          expected_revision,
+          JSON.stringify(trashFolderIds),
+          String(policy.allowSharedWrites),
+          String(allow_shared_note),
+          String(dry_run),
+        ]);
+        return ok(result);
+      } catch (error) {
+        return fail(error);
       }
     }
   );
@@ -163,37 +326,71 @@ export function registerWriteTools(server: McpServer): void {
     "delete_note",
     {
       description:
-        "Ask Notes to move one ordinary note to Recently Deleted, addressed only by its full stable note id.",
+        "Conflict-safe request to move one live note to the configured stable Recently Deleted folder. Supports dry-run and verifies recoverable placement.",
       inputSchema: {
-        id: fullNoteId.describe(
-          "Full note id. If a list response factored idPrefix, concatenate idPrefix and the displayed id."
-        ),
+        id: fullNoteId,
+        expected_revision: expectedRevision,
+        allow_shared_note: z.boolean().default(false),
+        dry_run: z.boolean().default(false),
       },
     },
-    async ({ id }) => {
+    async ({ id, expected_revision, allow_shared_note, dry_run }) => {
       try {
-        const deleted = await runJxa<{
-          deleted: boolean;
-          id: string;
-          name: string;
-          account: EntityIdentity;
-          folder: EntityIdentity;
-        }>(
-          `${JXA_SAFE_ERRORS}
-          ${JXA_IDENTITY_HELPERS}
-          ${JXA_DELETE_NOTE}
+        requireTrashFolderIds(trashFolderIds);
+        const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
+              const trashIds = JSON.parse(argv[2]);
+              const context = writeCatalogContext(Notes, trashIds);
               const target = resolveNoteForMutation(Notes, argv[0]);
-              return deleteNoteSafely(Notes, target, argv[1]);
+              assertLiveMutationTarget(target, context);
+              const shared = assertWritableNote(target.note, argv[3] === "true", argv[4] === "true");
+              const existingName = target.note.name();
+              const current = assertExpectedRevision(Notes, target.note, target.id, argv[1], context);
+              const trash = context.catalog.filter(folder =>
+                trashIds.indexOf(folder.id) !== -1 && folder.account.id === current.location.account.id
+              )[0];
+              if (!trash) {
+                throw safeError("TRASH_CONFIG_INCOMPLETE", "No configured stable Recently Deleted folder covers the selected note account.");
+              }
+              const preview = {
+                  dry_run: true,
+                  preview: {
+                    operation: "delete",
+                    target: { id: target.id, name: existingName, account: current.location.account, folder: current.location.folder },
+                    current_revision: current.revision,
+                    projected: { destination: { account: trash.account, folder: { id: trash.id, name: trash.name } } },
+                    loss_flags: { rich_content_loss: false, shared: shared, permanent_deletion: false },
+                  },
+                };
+              return executeWritePlan(argv[5] === "true", preview, () => {
+                return attemptMutation(target.id, () => {
+                  deleteNoteToConfiguredTrash(Notes, target.note);
+                  const state = verifyPostWrite(target.id, () => authoritativeNoteState(Notes, target.id, false));
+                  assertPostWriteRevisionChanged(target.id, current.revision, state.revision);
+                  if (state.folder.id !== trash.id) {
+                    postWriteVerificationFailure(target.id, "Notes did not verify recoverable placement with a new revision.");
+                  }
+                  return Object.assign(publicVerifiedState(state), {
+                    operation: "delete",
+                    deleted: true,
+                    post_write: publicVerifiedState(state),
+                  });
+                });
+              });
             });
-          }`,
-          [id, TRASH_FOLDER]
-        );
-        return ok(deleted);
-      } catch (e) {
-        return fail(e);
+          }`, [
+          id,
+          expected_revision,
+          JSON.stringify(trashFolderIds),
+          String(policy.allowSharedWrites),
+          String(allow_shared_note),
+          String(dry_run),
+        ]);
+        return ok(result);
+      } catch (error) {
+        return fail(error);
       }
     }
   );

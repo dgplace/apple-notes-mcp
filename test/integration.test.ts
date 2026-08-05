@@ -62,9 +62,12 @@ test("lifecycle: create → search → update → get → delete", { skip: !enab
 
     const marker = "integration-marker-zanzibar";
     const folderPage = await call("list_folders", {});
-    const targetFolder = folderPage.folders.find(
+    const writableFolders = folderPage.folders.filter(
+      (folder: { configured_as_trash?: boolean }) => !folder.configured_as_trash
+    );
+    const targetFolder = writableFolders.find(
       (folder: { name: string }) => folder.name === "Notes"
-    ) ?? folderPage.folders[0];
+    ) ?? writableFolders[0];
     assert.ok(targetFolder?.id, "No writable Notes folder was discovered");
     const created = await call("create_note", {
       title: "apple-notes-mcp integration test",
@@ -76,12 +79,20 @@ test("lifecycle: create → search → update → get → delete", { skip: !enab
     const found = await call("search_notes", { query: marker });
     assert.equal(found.notes.length, 1);
 
-    await call("update_note", { id: created.id, body: `${marker} updated`, mode: "replace" });
+    const updated = await call("update_note", {
+      id: created.id,
+      expected_revision: created.revision,
+      body: `${marker} updated`,
+      mode: "replace",
+    });
     const note = await call("get_note", { id: created.id });
     assert.match(note.plaintext, /updated/);
     assert.doesNotMatch(note.plaintext, /original/);
 
-    const deleted = await call("delete_note", { id: created.id });
+    const deleted = await call("delete_note", {
+      id: created.id,
+      expected_revision: updated.revision,
+    });
     assert.equal(deleted.deleted, true);
 
     const gone = await call("search_notes", { query: marker });

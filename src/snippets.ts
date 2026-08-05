@@ -114,14 +114,18 @@ export const JXA_UPDATE_NOTE = `
     return error;
   }
 
-  function updateNoteContent(note, body, mode, newTitle, allowRichContentLoss) {
+  function planNoteUpdate(note, body, mode, newTitle, allowRichContentLoss) {
     const existingBody = note.body();
 
     if (mode === "append") {
-      // Keep the complete Notes-supplied HTML, including embedded-object
-      // references, and add only the requested suffix.
-      note.body = existingBody + toHtml(body);
-      return;
+      const nextBody = existingBody + toHtml(body);
+      return {
+        existingBody: existingBody,
+        nextBody: nextBody,
+        // Appending must not reconstruct or even query the title.
+        projectedTitle: null,
+        richKinds: richContentKinds(note, existingBody),
+      };
     }
 
     const kinds = richContentKinds(note, existingBody);
@@ -134,7 +138,251 @@ export const JXA_UPDATE_NOTE = `
     }
 
     const heading = newTitle !== "" ? newTitle : note.name();
-    note.body = "<div><h1>" + escapeHtml(heading) + "</h1></div>" + toHtml(body);
+    return {
+      existingBody: existingBody,
+      nextBody: "<div><h1>" + escapeHtml(heading) + "</h1></div>" + toHtml(body),
+      projectedTitle: heading,
+      richKinds: kinds,
+    };
+  }
+
+  function applyNoteUpdate(note, plan) {
+    note.body = plan.nextBody;
+  }
+
+  function updateNoteContent(note, body, mode, newTitle, allowRichContentLoss) {
+    applyNoteUpdate(note, planNoteUpdate(note, body, mode, newTitle, allowRichContentLoss));
+  }
+`;
+
+// Preconditions and authoritative read-back helpers shared by all mutations.
+// All policy decisions use stable identities and current public Notes
+// properties. The revision read is deliberately performed by
+// assertExpectedRevision immediately before a caller invokes the mutation.
+export const JXA_WRITE_SAFETY = `
+  function safeError(code, message) {
+    const error = new Error(message);
+    error.appleNotesSafe = true;
+    error.appleNotesSafeCode = code;
+    return error;
+  }
+
+  function writeCatalogContext(Notes, configuredTrashIds) {
+    const catalog = folderCatalog(Notes, false);
+    validateTrashFolderIdsForRead(catalog, Notes.accounts.id(), configuredTrashIds);
+    const byId = {};
+    for (let i = 0; i < catalog.length; i++) byId[catalog[i].id] = catalog[i];
+    return { catalog: catalog, byId: byId, trashIds: configuredTrashIds };
+  }
+
+  function assertLiveMutationTarget(target, context) {
+    if (context.trashIds.indexOf(target.folder.id) !== -1) {
+      throw safeError(
+        "NOTE_IN_RECENTLY_DELETED",
+        "Refusing to mutate a note whose stable folder ID is configured as Recently Deleted."
+      );
+    }
+  }
+
+  function assertWritableNote(note, serverAllowsShared, callAllowsShared) {
+    if (Boolean(note.passwordProtected())) {
+      throw safeError("LOCKED_NOTE", "Refusing to mutate a locked note.");
+    }
+    const shared = Boolean(note.shared());
+    if (shared && !serverAllowsShared) {
+      throw safeError(
+        "SHARED_WRITES_DISABLED",
+        "Refusing to mutate a shared note unless APPLE_NOTES_ALLOW_SHARED_WRITES=true at server startup."
+      );
+    }
+    if (shared && !callAllowsShared) {
+      throw safeError(
+        "SHARED_WRITE_CONFIRMATION_REQUIRED",
+        "Refusing to mutate a shared note unless allow_shared_note=true is supplied for this call."
+      );
+    }
+    return shared;
+  }
+
+  function assertWritableFolder(folder, serverAllowsShared, callAllowsShared) {
+    const shared = Boolean(folder.shared());
+    if (shared && !serverAllowsShared) {
+      throw safeError(
+        "SHARED_WRITES_DISABLED",
+        "Refusing to create in a shared folder unless APPLE_NOTES_ALLOW_SHARED_WRITES=true at server startup."
+      );
+    }
+    if (shared && !callAllowsShared) {
+      throw safeError(
+        "SHARED_WRITE_CONFIRMATION_REQUIRED",
+        "Refusing to create in a shared folder unless allow_shared_note=true is supplied for this call."
+      );
+    }
+    return shared;
+  }
+
+  function assertExpectedRevision(Notes, note, id, expectedRevision, context) {
+    // Re-resolve stable location immediately before reading modificationDate.
+    // This catches folder-only moves even if Notes leaves the date unchanged.
+    const firstLocation = noteIdentityMap(Notes)[id];
+    if (!firstLocation) {
+      throw safeError("IDENTITY_UNAVAILABLE", "Stable account/folder identity is unavailable for the selected note.");
+    }
+    const firstModified = fullModificationTime(note.modificationDate());
+    const location = noteIdentityMap(Notes)[id];
+    if (!location) {
+      throw safeError("CONFLICT", "The note moved while its revision was being checked. Re-read it before retrying.");
+    }
+    // modificationDate is the final Notes property read before mutation.
+    const finalModified = fullModificationTime(note.modificationDate());
+    if (
+      firstModified !== finalModified ||
+      firstLocation.account.id !== location.account.id ||
+      firstLocation.folder.id !== location.folder.id
+    ) {
+      throw safeError("CONFLICT", "The note changed while its revision was being checked. Re-read it before retrying.");
+    }
+    if (context.trashIds.indexOf(location.folder.id) !== -1) {
+      throw safeError(
+        "NOTE_IN_RECENTLY_DELETED",
+        "Refusing to mutate a note whose stable folder ID is configured as Recently Deleted."
+      );
+    }
+    const current = revisionToken(
+      id,
+      location.account.id,
+      location.folder.id,
+      finalModified
+    );
+    if (current !== expectedRevision) {
+      throw safeError(
+        "CONFLICT",
+        "The note changed after it was read. Re-read it and retry with its current revision."
+      );
+    }
+    return { revision: current, location: location };
+  }
+
+  function executeWritePlan(dryRun, preview, mutation) {
+    if (dryRun) return preview;
+    return mutation();
+  }
+
+  function moveNoteToFolder(Notes, note, destinationFolder) {
+    Notes.move(note, { to: destinationFolder });
+  }
+
+  function deleteNoteToConfiguredTrash(Notes, note) {
+    Notes.delete(note);
+  }
+
+  function postWriteVerificationFailure(id, detail) {
+    const stableId = String(id).slice(0, 2048);
+    throw safeError(
+      "POST_WRITE_VERIFICATION_FAILED",
+      "The mutation may already have occurred for note " + stableId +
+      ". Re-read or list the note before retrying; do not retry blindly. " + detail
+    );
+  }
+
+  function postCreateAttemptFailure(folderId, title, detail) {
+    throw safeError(
+      "POST_WRITE_VERIFICATION_FAILED",
+      "The create mutation may already have occurred. List the target folder and inspect the title before retrying; do not retry blindly. " +
+      "Target folder " + String(folderId).slice(0, 512) +
+      ", title " + String(title).slice(0, 256) + ". " + detail
+    );
+  }
+
+  function attemptMutation(id, operation) {
+    try {
+      return operation();
+    } catch (error) {
+      if (error && error.appleNotesSafeCode === "POST_WRITE_VERIFICATION_FAILED") throw error;
+      postWriteVerificationFailure(id, "Apple Notes reported an error after the mutation was attempted.");
+    }
+  }
+
+  function attemptCreateMutation(folderId, title, state, operation) {
+    try {
+      return operation();
+    } catch (error) {
+      if (error && error.appleNotesSafeCode === "POST_WRITE_VERIFICATION_FAILED") throw error;
+      if (state.id !== "") {
+        postWriteVerificationFailure(state.id, "Apple Notes reported an error after create was attempted.");
+      }
+      postCreateAttemptFailure(folderId, title, "Apple Notes did not return a stable created-note ID.");
+    }
+  }
+
+  function verifyPostWrite(id, readback) {
+    try {
+      return readback();
+    } catch (error) {
+      if (error && error.appleNotesSafeCode === "POST_WRITE_VERIFICATION_FAILED") throw error;
+      postWriteVerificationFailure(id, "Apple Notes did not provide a complete authoritative read-back.");
+    }
+  }
+
+  function assertPostWriteRevisionChanged(id, previousRevision, nextRevision) {
+    if (previousRevision === nextRevision) {
+      postWriteVerificationFailure(id, "Apple Notes did not expose a new revision after the mutation.");
+    }
+  }
+
+  function authoritativeNoteState(Notes, id, includeBody) {
+    const ids = Notes.notes.id();
+    if (ids.indexOf(id) === -1) {
+      postWriteVerificationFailure(id, "The written note is not addressable after mutation.");
+    }
+    const firstLocation = noteIdentityMap(Notes)[id];
+    if (!firstLocation) {
+      postWriteVerificationFailure(id, "The written note location cannot be verified.");
+    }
+    const note = Notes.notes.byId(id);
+    const initialModified = fullModificationTime(note.modificationDate());
+    const name = note.name();
+    // Move/delete verification does not request or expose content, so those
+    // callers skip the body property entirely.
+    const body = includeBody ? note.body() : null;
+    const location = noteIdentityMap(Notes)[id];
+    const finalModified = fullModificationTime(note.modificationDate());
+    let observedRevision;
+    try {
+      observedRevision = consistentReadRevision(
+        id,
+        firstLocation,
+        initialModified,
+        location,
+        finalModified,
+        []
+      );
+    } catch (_) {
+      postWriteVerificationFailure(id, "The note changed again during authoritative read-back.");
+    }
+    return {
+      note: note,
+      id: id,
+      name: name,
+      body: body,
+      account: location.account,
+      folder: location.folder,
+      modified: finalModified.slice(0, 19) + "Z",
+      revision: observedRevision,
+    };
+  }
+
+  function publicVerifiedState(state) {
+    return {
+      verified: true,
+      id: state.id,
+      name: state.name,
+      account: state.account,
+      folder: state.folder,
+      modified: state.modified,
+      revision: state.revision,
+      ...(state.body === null ? {} : { body_html_chars: state.body.length }),
+    };
   }
 `;
 
