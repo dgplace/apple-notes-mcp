@@ -28,6 +28,7 @@
   },
   "files": [
     "dist",
+    "scripts/audit-production.mjs",
     "scripts/check-dependency-engines.mjs",
     "README.md",
     "DEPENDENCY_AUDIT.md",
@@ -38,6 +39,10 @@
   },
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json",
+    "format": "prettier --write \".github/**/*.yml\" \"scripts/**/*.mjs\" \"src/**/*.ts\" \"test/**/*.ts\" \"*.json\"",
+    "format:check": "prettier --check \".github/**/*.yml\" \"scripts/**/*.mjs\" \"src/**/*.ts\" \"test/**/*.ts\" \"*.json\"",
+    "audit:prod": "node scripts/audit-production.mjs",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "prepare": "npm run build",
@@ -58,6 +63,7 @@
   },
   "devDependencies": {
     "@types/node": "22.19.20",
+    "prettier": "3.6.2",
     "tsx": "4.22.4",
     "typescript": "5.9.3"
   },

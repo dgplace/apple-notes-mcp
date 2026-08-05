@@ -50,7 +50,7 @@ export function parseTrashFolderIds(value: string | undefined): string[] {
   if (value.trim() === "") {
     throw safeError(
       "TRASH_CONFIG_INVALID",
-      "APPLE_NOTES_TRASH_FOLDER_IDS is present but empty. Remove it for discovery or provide comma-separated full ICFolder IDs."
+      "APPLE_NOTES_TRASH_FOLDER_IDS is present but empty. Remove it for discovery or provide comma-separated full ICFolder IDs.",
     );
   }
 
@@ -58,20 +58,20 @@ export function parseTrashFolderIds(value: string | undefined): string[] {
   if (ids.length > READ_LIMITS.maxTrashFolders) {
     throw safeError(
       "TRASH_CONFIG_INVALID",
-      `APPLE_NOTES_TRASH_FOLDER_IDS accepts at most ${READ_LIMITS.maxTrashFolders} folder IDs.`
+      `APPLE_NOTES_TRASH_FOLDER_IDS accepts at most ${READ_LIMITS.maxTrashFolders} folder IDs.`,
     );
   }
   for (const id of ids) {
     if (id.length > READ_LIMITS.maxStableIdChars) {
       throw safeError(
         "TRASH_CONFIG_INVALID",
-        `APPLE_NOTES_TRASH_FOLDER_IDS entries may not exceed ${READ_LIMITS.maxStableIdChars} characters.`
+        `APPLE_NOTES_TRASH_FOLDER_IDS entries may not exceed ${READ_LIMITS.maxStableIdChars} characters.`,
       );
     }
     if (!/^x-coredata:\/\/.+\/ICFolder\/.+$/.test(id)) {
       throw safeError(
         "TRASH_CONFIG_INVALID",
-        "Every APPLE_NOTES_TRASH_FOLDER_IDS entry must be a full x-coredata://.../ICFolder/... ID from list_folders."
+        "Every APPLE_NOTES_TRASH_FOLDER_IDS entry must be a full x-coredata://.../ICFolder/... ID from list_folders.",
       );
     }
   }
@@ -85,7 +85,7 @@ export function requireTrashFolderIds(ids: readonly string[]): void {
   if (ids.length === 0) {
     throw safeError(
       "TRASH_CONFIG_REQUIRED",
-      "Reads are disabled until Recently Deleted is configured by stable identity. Call list_folders, identify exactly one localized Recently Deleted folder for every currently discovered account, set APPLE_NOTES_TRASH_FOLDER_IDS to their comma-separated full IDs, and restart the server."
+      "Reads are disabled until Recently Deleted is configured by stable identity. Call list_folders, identify exactly one localized Recently Deleted folder for every currently discovered account, set APPLE_NOTES_TRASH_FOLDER_IDS to their comma-separated full IDs, and restart the server.",
     );
   }
 }
@@ -93,7 +93,7 @@ export function requireTrashFolderIds(ids: readonly string[]): void {
 export function trashConfigurationStatus(
   configured: readonly string[],
   folders: readonly TrashFolderAccount[],
-  accountIds: readonly string[]
+  accountIds: readonly string[],
 ): TrashConfigurationStatus {
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
   const unknownFolderIds = configured.filter((id) => !folderById.has(id));
@@ -101,15 +101,10 @@ export function trashConfigurationStatus(
   for (const id of configured) {
     const folder = folderById.get(id);
     if (!folder) continue;
-    configuredByAccount.set(
-      folder.accountId,
-      (configuredByAccount.get(folder.accountId) ?? 0) + 1
-    );
+    configuredByAccount.set(folder.accountId, (configuredByAccount.get(folder.accountId) ?? 0) + 1);
   }
   const discoveredAccounts = [...new Set(accountIds)];
-  const missingAccountIds = discoveredAccounts.filter(
-    (accountId) => (configuredByAccount.get(accountId) ?? 0) === 0
-  );
+  const missingAccountIds = discoveredAccounts.filter((accountId) => (configuredByAccount.get(accountId) ?? 0) === 0);
   const duplicateAccountIds = [...configuredByAccount.entries()]
     .filter(([, count]) => count > 1)
     .map(([accountId]) => accountId);
@@ -134,26 +129,26 @@ function boundedIdList(ids: readonly string[]): string {
 export function assertCompleteTrashConfiguration(
   configured: readonly string[],
   folders: readonly TrashFolderAccount[],
-  accountIds: readonly string[]
+  accountIds: readonly string[],
 ): void {
   requireTrashFolderIds(configured);
   const status = trashConfigurationStatus(configured, folders, accountIds);
   if (status.unknownFolderIds.length > 0) {
     throw safeError(
       "TRASH_CONFIG_STALE",
-      `Configured trash folder IDs are not present in Notes: ${boundedIdList(status.unknownFolderIds)}. Re-run list_folders and update APPLE_NOTES_TRASH_FOLDER_IDS.`
+      `Configured trash folder IDs are not present in Notes: ${boundedIdList(status.unknownFolderIds)}. Re-run list_folders and update APPLE_NOTES_TRASH_FOLDER_IDS.`,
     );
   }
   if (status.duplicateAccountIds.length > 0) {
     throw safeError(
       "TRASH_CONFIG_INVALID",
-      `More than one configured trash folder belongs to these account IDs: ${boundedIdList(status.duplicateAccountIds)}. Configure exactly one Recently Deleted folder per account.`
+      `More than one configured trash folder belongs to these account IDs: ${boundedIdList(status.duplicateAccountIds)}. Configure exactly one Recently Deleted folder per account.`,
     );
   }
   if (status.missingAccountIds.length > 0) {
     throw safeError(
       "TRASH_CONFIG_INCOMPLETE",
-      `No configured trash folder covers these Notes account IDs: ${boundedIdList(status.missingAccountIds)}. Re-run list_folders and configure exactly one Recently Deleted folder per account.`
+      `No configured trash folder covers these Notes account IDs: ${boundedIdList(status.missingAccountIds)}. Re-run list_folders and configure exactly one Recently Deleted folder per account.`,
     );
   }
 }
@@ -166,19 +161,12 @@ function integer(value: unknown, fallback: number, label: string): number {
   return resolved;
 }
 
-export function normalizePageRequest(
-  limit: unknown,
-  offset: unknown,
-  defaultLimit: number
-): PageRequest {
+export function normalizePageRequest(limit: unknown, offset: unknown, defaultLimit: number): PageRequest {
   const requestedLimit = integer(limit, defaultLimit, "limit");
   const requestedOffset = integer(offset, 0, "offset");
   if (requestedLimit < 1) throw safeError("INVALID_ARGUMENT", "limit must be at least 1.");
   if (requestedOffset < 0 || requestedOffset > READ_LIMITS.maxOffset) {
-    throw safeError(
-      "INVALID_ARGUMENT",
-      `offset must be between 0 and ${READ_LIMITS.maxOffset}.`
-    );
+    throw safeError("INVALID_ARGUMENT", `offset must be between 0 and ${READ_LIMITS.maxOffset}.`);
   }
   return {
     limit: Math.min(requestedLimit, READ_LIMITS.maxResults),
@@ -191,10 +179,7 @@ export function normalizeBodyPageRequest(maxChars: unknown, offset: unknown): Bo
   const requestedOffset = integer(offset, 0, "offset");
   if (requested < 1) throw safeError("INVALID_ARGUMENT", "max_chars must be at least 1.");
   if (requestedOffset < 0 || requestedOffset > READ_LIMITS.maxOffset) {
-    throw safeError(
-      "INVALID_ARGUMENT",
-      `offset must be between 0 and ${READ_LIMITS.maxOffset}.`
-    );
+    throw safeError("INVALID_ARGUMENT", `offset must be between 0 and ${READ_LIMITS.maxOffset}.`);
   }
   return {
     // Never round this upward: returning more content than the caller asked
@@ -209,10 +194,7 @@ export function normalizeSearchQuery(value: unknown): string {
     throw safeError("INVALID_ARGUMENT", "query must be a non-empty string.");
   }
   if (value.length > READ_LIMITS.maxQueryChars) {
-    throw safeError(
-      "QUERY_TOO_LONG",
-      `query exceeds the hard limit of ${READ_LIMITS.maxQueryChars} characters.`
-    );
+    throw safeError("QUERY_TOO_LONG", `query exceeds the hard limit of ${READ_LIMITS.maxQueryChars} characters.`);
   }
   return value;
 }
@@ -225,7 +207,7 @@ export function normalizeSelector(value: unknown, label: string): string | undef
   if (value.length > READ_LIMITS.maxSelectorChars) {
     throw safeError(
       "INVALID_ARGUMENT",
-      `${label} exceeds the hard limit of ${READ_LIMITS.maxSelectorChars} characters.`
+      `${label} exceeds the hard limit of ${READ_LIMITS.maxSelectorChars} characters.`,
     );
   }
   return value;
@@ -238,14 +220,14 @@ export function serializedToolResultBytes(data: unknown, isError = false): numbe
       content: [{ type: "text", text }],
       ...(isError ? { isError: true } : {}),
     }),
-    "utf8"
+    "utf8",
   );
 }
 
 export function paginateBySerializedSize<T>(
   items: readonly T[],
   request: PageRequest,
-  assemble: (page: readonly T[], metadata: PageMetadata) => unknown
+  assemble: (page: readonly T[], metadata: PageMetadata) => unknown,
 ): unknown {
   const start = Math.min(request.offset, items.length);
   const countEnd = Math.min(start + request.limit, items.length);
@@ -270,7 +252,7 @@ export function paginateBySerializedSize<T>(
   if (page.length === 0 && start < countEnd) {
     throw safeError(
       "RESULT_ITEM_TOO_LARGE",
-      `One metadata item cannot fit within the ${READ_LIMITS.maxResponseBytes}-byte tool-result limit.`
+      `One metadata item cannot fit within the ${READ_LIMITS.maxResponseBytes}-byte tool-result limit.`,
     );
   }
 
@@ -284,10 +266,7 @@ export function paginateBySerializedSize<T>(
   };
   const data = assemble(page, metadata);
   if (serializedToolResultBytes(data) > READ_LIMITS.maxResponseBytes) {
-    throw safeError(
-      "RESULT_TOO_LARGE",
-      `Tool result exceeds the ${READ_LIMITS.maxResponseBytes}-byte hard limit.`
-    );
+    throw safeError("RESULT_TOO_LARGE", `Tool result exceeds the ${READ_LIMITS.maxResponseBytes}-byte hard limit.`);
   }
   return data;
 }

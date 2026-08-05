@@ -1,12 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { runJxa, type JxaRunner } from "../jxa.js";
-import {
-  JXA_BULK_RICH_METADATA,
-  JXA_IDENTITY_HELPERS,
-  JXA_RICH_CONTENT,
-  JXA_SAFE_ERRORS,
-} from "../snippets.js";
+import { JXA_BULK_RICH_METADATA, JXA_IDENTITY_HELPERS, JXA_RICH_CONTENT, JXA_SAFE_ERRORS } from "../snippets.js";
 import { ok, fail, factorIds } from "../helpers.js";
 import {
   READ_LIMITS,
@@ -25,13 +20,7 @@ import {
 } from "../read-policy.js";
 import { safeError } from "../errors.js";
 import { JXA_REVISION, revisionToken } from "../revision.js";
-import type {
-  EntityIdentity,
-  NoteDetail,
-  NoteLocation,
-  NoteSummary,
-  SummaryRichContent,
-} from "../types.js";
+import type { EntityIdentity, NoteDetail, NoteLocation, NoteSummary, SummaryRichContent } from "../types.js";
 
 interface FolderSummary {
   id: string;
@@ -80,10 +69,7 @@ function validateMetadata(meta: NoteMetadata): void {
   }
 }
 
-export function summaryRichContent(
-  noteId: string,
-  bulk: BulkRichMetadata
-): SummaryRichContent {
+export function summaryRichContent(noteId: string, bulk: BulkRichMetadata): SummaryRichContent {
   if (!bulk.available) {
     return {
       status: "unknown",
@@ -134,12 +120,7 @@ function noteSummaries(meta: NoteMetadata, trashIds: ReadonlySet<string>): NoteS
       account: location.account,
       folder: location.folder,
       modified: meta.modified[index],
-      revision: revisionToken(
-        id,
-        location.account.id,
-        location.folder.id,
-        meta.revisionModified[index]
-      ),
+      revision: revisionToken(id, location.account.id, location.folder.id, meta.revisionModified[index]),
       locked: Boolean(meta.locked[index]),
       shared: Boolean(meta.shared[index]),
       rich_content: summaryRichContent(id, meta.rich),
@@ -257,10 +238,7 @@ export function fitNoteDetailToResult(note: NoteDetail): NoteDetail {
   return fitted;
 }
 
-export function registerReadTools(
-  server: McpServer,
-  jxaRunner: JxaRunner = runJxa
-): void {
+export function registerReadTools(server: McpServer, jxaRunner: JxaRunner = runJxa): void {
   // Invalid explicit configuration prevents startup. Absence intentionally
   // enters discovery-only mode: list_folders works, note-bearing reads do not.
   const trashFolderIds = parseTrashFolderIds(process.env.APPLE_NOTES_TRASH_FOLDER_IDS);
@@ -297,8 +275,11 @@ export function registerReadTools(
         `);
         const status = trashConfigurationStatus(
           trashFolderIds,
-          catalog.folders.map((folder) => ({ id: folder.id, accountId: folder.account.id })),
-          catalog.accountIds
+          catalog.folders.map((folder) => ({
+            id: folder.id,
+            accountId: folder.account.id,
+          })),
+          catalog.accountIds,
         );
         const visible = catalog.folders
           .map((folder) => ({
@@ -306,32 +287,34 @@ export function registerReadTools(
             ...(trashFolderIds.includes(folder.id) ? { configured_as_trash: true } : {}),
           }))
           .sort((a, b) => a.account.id.localeCompare(b.account.id) || a.id.localeCompare(b.id));
-        const payload = paginateBySerializedSize(
-          visible,
-          request,
-          (pageFolders, page: PageMetadata) => ({
-            trash_configuration: {
-              ready: status.ready,
-              variable: "APPLE_NOTES_TRASH_FOLDER_IDS",
-              ...(status.unknownFolderIds.length > 0
-                ? { stale_ids: status.unknownFolderIds.slice(0, READ_LIMITS.maxTrashFolders) }
-                : {}),
-              ...(status.missingAccountIds.length > 0
-                ? { missing_account_ids: status.missingAccountIds.slice(0, READ_LIMITS.maxTrashFolders) }
-                : {}),
-              ...(status.duplicateAccountIds.length > 0
-                ? { duplicate_account_ids: status.duplicateAccountIds.slice(0, READ_LIMITS.maxTrashFolders) }
-                : {}),
-            },
-            folders: pageFolders,
-            page,
-          })
-        );
+        const payload = paginateBySerializedSize(visible, request, (pageFolders, page: PageMetadata) => ({
+          trash_configuration: {
+            ready: status.ready,
+            variable: "APPLE_NOTES_TRASH_FOLDER_IDS",
+            ...(status.unknownFolderIds.length > 0
+              ? {
+                  stale_ids: status.unknownFolderIds.slice(0, READ_LIMITS.maxTrashFolders),
+                }
+              : {}),
+            ...(status.missingAccountIds.length > 0
+              ? {
+                  missing_account_ids: status.missingAccountIds.slice(0, READ_LIMITS.maxTrashFolders),
+                }
+              : {}),
+            ...(status.duplicateAccountIds.length > 0
+              ? {
+                  duplicate_account_ids: status.duplicateAccountIds.slice(0, READ_LIMITS.maxTrashFolders),
+                }
+              : {}),
+          },
+          folders: pageFolders,
+          page,
+        }));
         return ok(payload);
       } catch (error) {
         return fail(error);
       }
-    }
+    },
   );
 
   server.registerTool(
@@ -360,16 +343,12 @@ export function registerReadTools(
           folderName ?? "",
           JSON.stringify(trashFolderIds),
         ]);
-        assertCompleteTrashConfiguration(
-          trashFolderIds,
-          meta.folderAccounts,
-          meta.accountIds
-        );
+        assertCompleteTrashConfiguration(trashFolderIds, meta.folderAccounts, meta.accountIds);
         return ok(buildNotePage(noteSummaries(meta, new Set(trashFolderIds)), request));
       } catch (error) {
         return fail(error);
       }
-    }
+    },
   );
 
   server.registerTool(
@@ -399,11 +378,7 @@ export function registerReadTools(
           q,
           scope,
         ]);
-        assertCompleteTrashConfiguration(
-          trashFolderIds,
-          meta.folderAccounts,
-          meta.accountIds
-        );
+        assertCompleteTrashConfiguration(trashFolderIds, meta.folderAccounts, meta.accountIds);
         validateMetadata(meta);
 
         const trash = new Set(trashFolderIds);
@@ -412,7 +387,7 @@ export function registerReadTools(
       } catch (error) {
         return fail(error);
       }
-    }
+    },
   );
 
   server.registerTool(
@@ -423,7 +398,11 @@ export function registerReadTools(
       inputSchema: {
         id: z.string().max(READ_LIMITS.maxSelectorChars).optional(),
         title: z.string().max(READ_LIMITS.maxSelectorChars).optional(),
-        max_chars: z.number().int().min(1).default(READ_LIMITS.defaultBodyPageChars)
+        max_chars: z
+          .number()
+          .int()
+          .min(1)
+          .default(READ_LIMITS.defaultBodyPageChars)
           .describe(`Requested characters; values above ${READ_LIMITS.maxBodyPageChars} are clamped`),
         offset: z.number().int().min(0).max(READ_LIMITS.maxOffset).default(0),
       },
@@ -436,7 +415,8 @@ export function registerReadTools(
         if (!noteId && !noteTitle) throw safeError("INVALID_ARGUMENT", "Provide either id or title.");
         if (noteId && noteTitle) throw safeError("INVALID_ARGUMENT", "Provide either id or title, not both.");
         const pageRequest = normalizeBodyPageRequest(max_chars, offset);
-        const note = await jxaRunner<NoteDetail>(`${JXA_SAFE_ERRORS}
+        const note = await jxaRunner<NoteDetail>(
+          `${JXA_SAFE_ERRORS}
           ${JXA_IDENTITY_HELPERS}
           ${JXA_RICH_CONTENT}
           ${JXA_REVISION}
@@ -518,17 +498,19 @@ export function registerReadTools(
               }, content);
             });
           }
-        `, [
-          noteId ?? "",
-          noteTitle ?? "",
-          JSON.stringify(trashFolderIds),
-          String(pageRequest.offset),
-          String(pageRequest.maxChars),
-        ]);
+        `,
+          [
+            noteId ?? "",
+            noteTitle ?? "",
+            JSON.stringify(trashFolderIds),
+            String(pageRequest.offset),
+            String(pageRequest.maxChars),
+          ],
+        );
         return ok(fitNoteDetailToResult(note));
       } catch (error) {
         return fail(error);
       }
-    }
+    },
   );
 }

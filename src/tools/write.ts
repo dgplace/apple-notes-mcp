@@ -13,23 +13,20 @@ import { ok, fail } from "../helpers.js";
 import { safeError, writeBoundaryError } from "../errors.js";
 import { parseTrashFolderIds, requireTrashFolderIds } from "../read-policy.js";
 import type { WritePolicy } from "../write-policy.js";
-import {
-  CONTENT_LIMITS,
-  prepareContent,
-} from "../content.js";
+import { CONTENT_LIMITS, prepareContent } from "../content.js";
 
 const fullFolderId = z
   .string()
   .regex(
     /^x-coredata:\/\/.+\/ICFolder\/.+$/,
-    "folder_id must be a full x-coredata://.../ICFolder/... id from list_folders"
+    "folder_id must be a full x-coredata://.../ICFolder/... id from list_folders",
   );
 
 const fullNoteId = z
   .string()
   .regex(
     /^x-coredata:\/\/.+\/ICNote\/.+$/,
-    "id must be a full x-coredata://.../ICNote/... id; short ids and titles are not accepted for mutations"
+    "id must be a full x-coredata://.../ICNote/... id; short ids and titles are not accepted for mutations",
   );
 
 const expectedRevision = z
@@ -66,19 +63,13 @@ export function requireTrashConfirmation(value: unknown): asserts value is true 
   if (value !== true) {
     throw safeError(
       "TRASH_CONFIRMATION_REQUIRED",
-      "trash_note requires confirm: true. No Apple Notes automation was launched."
+      "trash_note requires confirm: true. No Apple Notes automation was launched.",
     );
   }
 }
 
-export function registerWriteTools(
-  server: McpServer,
-  policy: WritePolicy,
-  jxaRunner: JxaRunner = runJxa
-): void {
-  const trashFolderIds = parseTrashFolderIds(
-    process.env.APPLE_NOTES_TRASH_FOLDER_IDS
-  );
+export function registerWriteTools(server: McpServer, policy: WritePolicy, jxaRunner: JxaRunner = runJxa): void {
+  const trashFolderIds = parseTrashFolderIds(process.env.APPLE_NOTES_TRASH_FOLDER_IDS);
 
   server.registerTool(
     "create_note",
@@ -88,14 +79,16 @@ export function registerWriteTools(
       inputSchema: {
         title: z.string().min(1).describe("Note title"),
         body: z.string().max(CONTENT_LIMITS.maxInputChars).default("").describe("Note body"),
-        content_format: z.enum(["plain", "html"]).default("plain").describe(
-          "plain always escapes markup; html also requires APPLE_NOTES_ALLOW_RAW_HTML=true"
-        ),
+        content_format: z
+          .enum(["plain", "html"])
+          .default("plain")
+          .describe("plain always escapes markup; html also requires APPLE_NOTES_ALLOW_RAW_HTML=true"),
         folder_id: fullFolderId.describe("Full stable folder id from list_folders"),
         dry_run: z.boolean().default(false),
-        allow_shared_note: z.boolean().default(false).describe(
-          "Per-call shared-write confirmation; also requires APPLE_NOTES_ALLOW_SHARED_WRITES=true"
-        ),
+        allow_shared_note: z
+          .boolean()
+          .default(false)
+          .describe("Per-call shared-write confirmation; also requires APPLE_NOTES_ALLOW_SHARED_WRITES=true"),
       },
     },
     async ({ title, body, content_format, folder_id, dry_run, allow_shared_note }) => {
@@ -104,7 +97,8 @@ export function registerWriteTools(
         const content = prepareContent(body, content_format, policy.allowRawHtml);
         requireTrashFolderIds(trashFolderIds);
         automationStarted = true;
-        const result = await jxaRunner<VerifiedWriteResult | object>(`${scriptPreamble}
+        const result = await jxaRunner<VerifiedWriteResult | object>(
+          `${scriptPreamble}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
@@ -156,28 +150,32 @@ export function registerWriteTools(
                 });
               });
             });
-          }`, [
-          title,
-          content.html,
-          folder_id,
-          JSON.stringify(trashFolderIds),
-          String(policy.allowSharedWrites),
-          String(allow_shared_note),
-          String(dry_run),
-          content.format,
-          String(content.inputChars),
-        ]);
+          }`,
+          [
+            title,
+            content.html,
+            folder_id,
+            JSON.stringify(trashFolderIds),
+            String(policy.allowSharedWrites),
+            String(allow_shared_note),
+            String(dry_run),
+            content.format,
+            String(content.inputChars),
+          ],
+        );
         return ok(result);
       } catch (error) {
-        return fail(writeBoundaryError(error, {
-          automationStarted,
-          dryRun: dry_run,
-          operation: "create",
-          folderId: folder_id,
-          title,
-        }));
+        return fail(
+          writeBoundaryError(error, {
+            automationStarted,
+            dryRun: dry_run,
+            operation: "create",
+            folderId: folder_id,
+            title,
+          }),
+        );
       }
-    }
+    },
   );
 
   server.registerTool(
@@ -189,9 +187,10 @@ export function registerWriteTools(
         id: fullNoteId,
         expected_revision: expectedRevision,
         body: z.string().min(1).max(CONTENT_LIMITS.maxInputChars).describe("Content to write"),
-        content_format: z.enum(["plain", "html"]).default("plain").describe(
-          "plain always escapes markup; html also requires APPLE_NOTES_ALLOW_RAW_HTML=true"
-        ),
+        content_format: z
+          .enum(["plain", "html"])
+          .default("plain")
+          .describe("plain always escapes markup; html also requires APPLE_NOTES_ALLOW_RAW_HTML=true"),
         mode: z.enum(["replace", "append"]).default("replace"),
         new_title: z.string().optional().describe("Rename the note (replace mode only)"),
         allow_rich_content_loss: z.boolean().default(false),
@@ -215,7 +214,8 @@ export function registerWriteTools(
         const content = prepareContent(body, content_format, policy.allowRawHtml);
         requireTrashFolderIds(trashFolderIds);
         automationStarted = true;
-        const result = await jxaRunner<VerifiedWriteResult | object>(`${scriptPreamble}
+        const result = await jxaRunner<VerifiedWriteResult | object>(
+          `${scriptPreamble}
           ${JXA_UPDATE_NOTE}
           function run(argv) {
             return runSafely(() => {
@@ -274,30 +274,34 @@ export function registerWriteTools(
                 });
               });
             });
-          }`, [
-          id,
-          expected_revision,
-          content.html,
-          mode,
-          new_title ?? "",
-          String(allow_rich_content_loss),
-          JSON.stringify(trashFolderIds),
-          String(policy.allowSharedWrites),
-          String(allow_shared_note),
-          String(dry_run),
-          content.format,
-          String(content.inputChars),
-        ]);
+          }`,
+          [
+            id,
+            expected_revision,
+            content.html,
+            mode,
+            new_title ?? "",
+            String(allow_rich_content_loss),
+            JSON.stringify(trashFolderIds),
+            String(policy.allowSharedWrites),
+            String(allow_shared_note),
+            String(dry_run),
+            content.format,
+            String(content.inputChars),
+          ],
+        );
         return ok(result);
       } catch (error) {
-        return fail(writeBoundaryError(error, {
-          automationStarted,
-          dryRun: dry_run,
-          operation: mode,
-          noteId: id,
-        }));
+        return fail(
+          writeBoundaryError(error, {
+            automationStarted,
+            dryRun: dry_run,
+            operation: mode,
+            noteId: id,
+          }),
+        );
       }
-    }
+    },
   );
 
   server.registerTool(
@@ -318,7 +322,8 @@ export function registerWriteTools(
       try {
         requireTrashFolderIds(trashFolderIds);
         automationStarted = true;
-        const result = await jxaRunner<VerifiedWriteResult | object>(`${scriptPreamble}
+        const result = await jxaRunner<VerifiedWriteResult | object>(
+          `${scriptPreamble}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
@@ -362,25 +367,29 @@ export function registerWriteTools(
                 });
               });
             });
-          }`, [
-          id,
-          folder_id,
-          expected_revision,
-          JSON.stringify(trashFolderIds),
-          String(policy.allowSharedWrites),
-          String(allow_shared_note),
-          String(dry_run),
-        ]);
+          }`,
+          [
+            id,
+            folder_id,
+            expected_revision,
+            JSON.stringify(trashFolderIds),
+            String(policy.allowSharedWrites),
+            String(allow_shared_note),
+            String(dry_run),
+          ],
+        );
         return ok(result);
       } catch (error) {
-        return fail(writeBoundaryError(error, {
-          automationStarted,
-          dryRun: dry_run,
-          operation: "move",
-          noteId: id,
-        }));
+        return fail(
+          writeBoundaryError(error, {
+            automationStarted,
+            dryRun: dry_run,
+            operation: "move",
+            noteId: id,
+          }),
+        );
       }
-    }
+    },
   );
 
   server.registerTool(
@@ -392,23 +401,18 @@ export function registerWriteTools(
         id: fullNoteId,
         expected_revision: expectedRevision,
         confirm: z.literal(true).describe("Must be literal true for every trash request"),
-        allow_shared_trash: z.boolean().default(false).describe(
-          "Dedicated per-call shared-trash gate; also requires the server shared-write capability"
-        ),
-        confirm_shared_impact: z.boolean().default(false).describe(
-          "For a shared note, acknowledge unknown ownership and possible collaborator impact"
-        ),
+        allow_shared_trash: z
+          .boolean()
+          .default(false)
+          .describe("Dedicated per-call shared-trash gate; also requires the server shared-write capability"),
+        confirm_shared_impact: z
+          .boolean()
+          .default(false)
+          .describe("For a shared note, acknowledge unknown ownership and possible collaborator impact"),
         dry_run: z.boolean().default(false),
       },
     },
-    async ({
-      id,
-      expected_revision,
-      confirm,
-      allow_shared_trash,
-      confirm_shared_impact,
-      dry_run,
-    }) => {
+    async ({ id, expected_revision, confirm, allow_shared_trash, confirm_shared_impact, dry_run }) => {
       let automationStarted = false;
       try {
         // This check is intentionally independent of the schema boundary so
@@ -416,7 +420,8 @@ export function registerWriteTools(
         requireTrashConfirmation(confirm);
         requireTrashFolderIds(trashFolderIds);
         automationStarted = true;
-        const result = await jxaRunner<VerifiedWriteResult | object>(`${scriptPreamble}
+        const result = await jxaRunner<VerifiedWriteResult | object>(
+          `${scriptPreamble}
           function run(argv) {
             return runSafely(() => {
               const Notes = Application("Notes");
@@ -484,24 +489,28 @@ export function registerWriteTools(
                 });
               });
             });
-          }`, [
-          id,
-          expected_revision,
-          JSON.stringify(trashFolderIds),
-          String(policy.allowSharedWrites),
-          String(allow_shared_trash),
-          String(confirm_shared_impact),
-          String(dry_run),
-        ]);
+          }`,
+          [
+            id,
+            expected_revision,
+            JSON.stringify(trashFolderIds),
+            String(policy.allowSharedWrites),
+            String(allow_shared_trash),
+            String(confirm_shared_impact),
+            String(dry_run),
+          ],
+        );
         return ok(result);
       } catch (error) {
-        return fail(writeBoundaryError(error, {
-          automationStarted,
-          dryRun: dry_run,
-          operation: "trash",
-          noteId: id,
-        }));
+        return fail(
+          writeBoundaryError(error, {
+            automationStarted,
+            dryRun: dry_run,
+            operation: "trash",
+            noteId: id,
+          }),
+        );
       }
-    }
+    },
   );
 }

@@ -13,52 +13,26 @@ export interface PreparedContent {
   html: string;
 }
 
-const ALLOWED_CONTAINER_TAGS = new Set([
-  "div",
-  "p",
-  "blockquote",
-  "pre",
-  "ul",
-  "ol",
-  "li",
-]);
-const ALLOWED_INLINE_TAGS = new Set([
-  "strong",
-  "em",
-  "b",
-  "i",
-  "u",
-  "s",
-  "code",
-]);
-const ALLOWED_TAGS = new Set([
-  ...ALLOWED_CONTAINER_TAGS,
-  ...ALLOWED_INLINE_TAGS,
-  "br",
-]);
+const ALLOWED_CONTAINER_TAGS = new Set(["div", "p", "blockquote", "pre", "ul", "ol", "li"]);
+const ALLOWED_INLINE_TAGS = new Set(["strong", "em", "b", "i", "u", "s", "code"]);
+const ALLOWED_TAGS = new Set([...ALLOWED_CONTAINER_TAGS, ...ALLOWED_INLINE_TAGS, "br"]);
 const INLINE_OR_PARAGRAPH = new Set(["p", ...ALLOWED_INLINE_TAGS]);
 
 function assertInputBound(value: string): void {
   if (value.length > CONTENT_LIMITS.maxInputChars) {
-    throw safeError(
-      "CONTENT_TOO_LARGE",
-      `Content exceeds the ${CONTENT_LIMITS.maxInputChars}-character hard limit.`
-    );
+    throw safeError("CONTENT_TOO_LARGE", `Content exceeds the ${CONTENT_LIMITS.maxInputChars}-character hard limit.`);
   }
 }
 
 function escapeText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function assertOutputBound(value: string): string {
   if (value.length > CONTENT_LIMITS.maxProjectedHtmlChars) {
     throw safeError(
       "CONTENT_TOO_LARGE",
-      `Projected HTML exceeds the ${CONTENT_LIMITS.maxProjectedHtmlChars}-character hard limit.`
+      `Projected HTML exceeds the ${CONTENT_LIMITS.maxProjectedHtmlChars}-character hard limit.`,
     );
   }
   return value;
@@ -72,7 +46,7 @@ export function plainTextToHtml(value: string): string {
     normalized
       .split("\n")
       .map((line) => `<div>${escapeText(line) || "<br>"}</div>`)
-      .join("")
+      .join(""),
   );
 }
 
@@ -89,10 +63,7 @@ function decodeEntity(entity: string): string {
   const decimal = /^#([0-9]+)$/.exec(entity);
   const hexadecimal = /^#[xX]([0-9a-fA-F]+)$/.exec(entity);
   if (!decimal && !hexadecimal) {
-    throw safeError(
-      "INVALID_HTML",
-      "Raw HTML contains an unsupported or malformed character entity."
-    );
+    throw safeError("INVALID_HTML", "Raw HTML contains an unsupported or malformed character entity.");
   }
   const codePoint = Number.parseInt(decimal?.[1] ?? hexadecimal![1], hexadecimal ? 16 : 10);
   if (
@@ -214,11 +185,7 @@ export function sanitizeNotesHtml(value: string): string {
 }
 
 /** Runtime policy boundary, independent of schema validation/defaults. */
-export function prepareContent(
-  body: unknown,
-  format: unknown,
-  allowRawHtml: boolean
-): PreparedContent {
+export function prepareContent(body: unknown, format: unknown, allowRawHtml: boolean): PreparedContent {
   if (typeof body !== "string") {
     throw safeError("INVALID_ARGUMENT", "body must be a string.");
   }
@@ -228,7 +195,7 @@ export function prepareContent(
   if (format === "html" && !allowRawHtml) {
     throw safeError(
       "RAW_HTML_DISABLED",
-      "Raw HTML is disabled. Set APPLE_NOTES_ALLOW_RAW_HTML=true at server startup and explicitly pass content_format=html only for trusted content."
+      "Raw HTML is disabled. Set APPLE_NOTES_ALLOW_RAW_HTML=true at server startup and explicitly pass content_format=html only for trusted content.",
     );
   }
   return {

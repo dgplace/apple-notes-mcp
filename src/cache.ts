@@ -13,7 +13,7 @@ export function staleIds(
   ids: string[],
   modified: string[],
   deleted: Set<string>,
-  cache: Map<string, CachedNote> = plaintextCache
+  cache: Map<string, CachedNote> = plaintextCache,
 ): string[] {
   return ids.filter((id, i) => !deleted.has(id) && cache.get(id)?.modified !== modified[i]);
 }

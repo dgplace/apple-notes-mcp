@@ -14,18 +14,30 @@ npm run build            # required: --ignore-scripts skips prepare/dist generat
 ## Workflow
 
 - `npm test` — fast unit tests. No Notes.app, no macOS automation permission needed.
+- `npm run format:check` — deterministic Prettier check for code and configuration.
+- `npm run typecheck` — strict type checking for both `src/` and `test/`.
+- `npm run audit:prod` — production audit gate; fails on high/critical findings and
+  reports the reviewed lower-severity exception recorded in `DEPENDENCY_AUDIT.md`.
 - `npm run check:dependency-engines` — verify reviewed transitive Node 18 compatibility.
 - `npm run dev` — `tsc --watch` for incremental builds.
 - `npm run build` — type-check and emit `dist/`.
-- `npm run test:integration` — full lifecycle against the **real** Notes.app
-  (creates and deletes one test note). macOS only; opt-in.
+- `npm run test:integration` — isolated lifecycle against the **real** Notes.app.
+  macOS only; explicitly opt-in and never run by CI. It requires a dedicated test
+  account selected by full `APPLE_NOTES_IT_ACCOUNT_ID` plus a complete stable
+  `APPLE_NOTES_TRASH_FOLDER_IDS` configuration. Each run creates a UUID-named
+  folder and note, trashes the exact created note once, and never retries an
+  uncertain trash outcome. Notes scripting has no approved recoverable way to
+  remove a fixture folder recoverably, so the test reports its exact ID and
+  whether note cleanup was verified for manual inspection instead of invoking a
+  delete primitive.
 
 ## Pull requests
 
 1. Open an issue first for anything non-trivial so we can agree on the approach.
 2. Keep changes focused. One concern per PR.
 3. Add or update tests. Unit tests must pass on Node 18, 20, and 22 (CI enforces).
-4. Run `npm test` and `npm run build` before pushing.
+4. Run `npm run format:check`, `npm run typecheck`, `npm test`,
+   `npm run audit:prod`, and `npm run build` before pushing.
 5. Match the existing code style: TypeScript strict mode, ES modules, no new
    runtime dependencies without discussion (the small dependency surface is a
    deliberate feature).

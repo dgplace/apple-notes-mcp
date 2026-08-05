@@ -6,17 +6,11 @@ import { parseAllowRawHtml, parseAllowSharedWrites } from "./write-policy.js";
 
 async function main() {
   const mode = parseAppleNotesMode(process.env.APPLE_NOTES_MODE);
-  const allowSharedWrites = parseAllowSharedWrites(
-    process.env.APPLE_NOTES_ALLOW_SHARED_WRITES
-  );
+  const allowSharedWrites = parseAllowSharedWrites(process.env.APPLE_NOTES_ALLOW_SHARED_WRITES);
   const allowRawHtml = parseAllowRawHtml(process.env.APPLE_NOTES_ALLOW_RAW_HTML);
   // Production always supplies the fixed /usr/bin/osascript runner. The server
   // factory accepts a runner only so unit tests can avoid Notes automation.
-  const server = createAppleNotesServer(
-    mode,
-    { allowSharedWrites, allowRawHtml },
-    runJxa
-  );
+  const server = createAppleNotesServer(mode, { allowSharedWrites, allowRawHtml }, runJxa);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`apple-notes MCP server running on stdio (${mode})`);

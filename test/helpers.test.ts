@@ -3,10 +3,7 @@ import assert from "node:assert/strict";
 import { factorIds, truncateBody, ok, fail } from "../src/helpers.js";
 
 test("factorIds factors a shared prefix", () => {
-  const { idPrefix, shorten } = factorIds([
-    "x-coredata://AAA/ICNote/p1",
-    "x-coredata://AAA/ICNote/p2",
-  ]);
+  const { idPrefix, shorten } = factorIds(["x-coredata://AAA/ICNote/p1", "x-coredata://AAA/ICNote/p2"]);
   assert.equal(idPrefix, "x-coredata://AAA/ICNote/");
   assert.equal(shorten("x-coredata://AAA/ICNote/p1"), "p1");
 });
@@ -45,7 +42,7 @@ test("fail wraps an Error message and sets isError", () => {
   assert.equal(res.isError, true);
   assert.equal(
     res.content[0].text,
-    "Error [AUTOMATION_FAILED]: Apple Notes automation failed without a safe diagnostic."
+    "Error [AUTOMATION_FAILED]: Apple Notes automation failed without a safe diagnostic.",
   );
   assert.doesNotMatch(res.content[0].text, /boom/);
 });

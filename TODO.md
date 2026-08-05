@@ -195,12 +195,12 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** Every change is checked against security and data-integrity regressions. CI itself is repaired in section 1.
 
-- [ ] Run formatting, type checking, unit tests, and dependency audit in CI.
-- [ ] Type-check `test/` as well — `tsconfig.json` excludes it, so tests are checked only by `tsx` at runtime.
-- [ ] Add mocked tests for read-only enforcement, confirmations, revisions, ambiguity, localization, shared notes, locked notes, and rich content.
-- [ ] Add opt-in macOS integration tests using a dedicated temporary Notes account/folder and uniquely named fixtures.
-- [ ] Ensure integration cleanup never retries deletion on a note already in Recently Deleted.
-- [ ] Add tests for oversized input/output and automation timeouts.
+- [x] Run formatting, type checking, unit tests, and dependency audit in CI.
+- [x] Type-check `test/` as well — `tsconfig.json` excludes it, so tests are checked only by `tsx` at runtime.
+- [x] Add mocked tests for read-only enforcement, confirmations, revisions, ambiguity, localization, shared notes, locked notes, and rich content.
+- [x] Add opt-in macOS integration tests using a dedicated temporary Notes account/folder and uniquely named fixtures.
+- [x] Ensure integration cleanup never retries deletion on a note already in Recently Deleted.
+- [x] Add tests for oversized input/output and automation timeouts.
 
 **Acceptance criteria:**
 

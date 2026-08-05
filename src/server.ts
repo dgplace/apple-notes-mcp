@@ -34,22 +34,20 @@ export function parseAppleNotesMode(value: string | undefined): AppleNotesMode {
   if (value === undefined) return "read-only";
   if (value === "read-only" || value === "read-write") return value;
 
-  throw new Error(
-    `Invalid APPLE_NOTES_MODE ${JSON.stringify(value)}. Expected exactly "read-only" or "read-write".`
-  );
+  throw new Error(`Invalid APPLE_NOTES_MODE ${JSON.stringify(value)}. Expected exactly "read-only" or "read-write".`);
 }
 
 export function createAppleNotesServer(
   mode: AppleNotesMode,
   writePolicy: WritePolicy = { allowSharedWrites: false, allowRawHtml: false },
-  jxaRunner: JxaRunner = runJxa
+  jxaRunner: JxaRunner = runJxa,
 ): McpServer {
   const server = new McpServer(
     {
       name: "apple-notes",
       version: SERVER_VERSION,
     },
-    { instructions: SERVER_INSTRUCTIONS }
+    { instructions: SERVER_INSTRUCTIONS },
   );
 
   registerReadTools(server, jxaRunner);

@@ -6,10 +6,7 @@ export function ok(data: unknown) {
     content: [{ type: "text" as const, text: JSON.stringify(data) }],
   };
   if (serializedToolResultBytes(data) > READ_LIMITS.maxResponseBytes) {
-    throw safeError(
-      "RESULT_TOO_LARGE",
-      `Tool result exceeds the ${READ_LIMITS.maxResponseBytes}-byte hard limit.`
-    );
+    throw safeError("RESULT_TOO_LARGE", `Tool result exceeds the ${READ_LIMITS.maxResponseBytes}-byte hard limit.`);
   }
   return result;
 }
@@ -43,7 +40,6 @@ export function truncateBody(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const total = text.length;
   return (
-    text.slice(0, maxChars) +
-    `\n…[truncated ${total - maxChars} of ${total} chars — re-call with max_chars=${total}]`
+    text.slice(0, maxChars) + `\n…[truncated ${total - maxChars} of ${total} chars — re-call with max_chars=${total}]`
   );
 }

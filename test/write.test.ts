@@ -1,13 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  JXA_HTML_HELPERS,
-  JXA_UPDATE_NOTE,
-} from "../src/snippets.js";
+import { JXA_HTML_HELPERS, JXA_UPDATE_NOTE } from "../src/snippets.js";
 import { prepareContent } from "../src/content.js";
 
 const { richContentKinds, updateNoteContent } = new Function(
-  `${JXA_HTML_HELPERS}\n${JXA_UPDATE_NOTE}; return { richContentKinds, updateNoteContent };`
+  `${JXA_HTML_HELPERS}\n${JXA_UPDATE_NOTE}; return { richContentKinds, updateNoteContent };`,
 )();
 
 interface Fixture {
@@ -19,14 +16,12 @@ interface Fixture {
 const FIXTURES: Fixture[] = [
   {
     kind: "attachment",
-    html:
-      '<div><h1>Files</h1></div><object type="application/x-apple-msg-attachment" data="cid:file"></object>',
+    html: '<div><h1>Files</h1></div><object type="application/x-apple-msg-attachment" data="cid:file"></object>',
     attachmentNames: ["report.pdf"],
   },
   {
     kind: "drawing",
-    html:
-      '<div><h1>Sketch</h1></div><object type="com.apple.notes.drawing" data-attachment-identifier="drawing-1"></object>',
+    html: '<div><h1>Sketch</h1></div><object type="com.apple.notes.drawing" data-attachment-identifier="drawing-1"></object>',
     attachmentNames: ["Drawing"],
   },
   {
@@ -35,8 +30,7 @@ const FIXTURES: Fixture[] = [
   },
   {
     kind: "checklist",
-    html:
-      '<div><h1>Tasks</h1></div><ul class="com-apple-note-checklist"><li data-checked="false">item</li></ul>',
+    html: '<div><h1>Tasks</h1></div><ul class="com-apple-note-checklist"><li data-checked="false">item</li></ul>',
   },
 ];
 
@@ -71,7 +65,7 @@ for (const fixture of FIXTURES) {
 
     assert.throws(
       () => updateNoteContent(note, "<div>replacement</div>", "replace", "", false),
-      new RegExp(`rich content.*${fixture.kind}.*allow_rich_content_loss`, "i")
+      new RegExp(`rich content.*${fixture.kind}.*allow_rich_content_loss`, "i"),
     );
     assert.equal(typeof note.body, "function", "rejection must happen before mutation");
   });
@@ -81,10 +75,7 @@ for (const fixture of FIXTURES) {
 
     updateNoteContent(note, "<div>replacement</div>", "replace", "", true);
 
-    assert.equal(
-      note.body,
-      "<div><h1>Original title</h1></div><div>replacement</div>"
-    );
+    assert.equal(note.body, "<div><h1>Original title</h1></div><div>replacement</div>");
   });
 
   test(`append preserves ${fixture.kind} HTML and the title`, () => {
@@ -106,10 +97,7 @@ test("replace preserves the existing title when new_title is absent", () => {
 
   updateNoteContent(note, "<div>new body</div>", "replace", "", false);
 
-  assert.equal(
-    note.body,
-    "<div><h1>Original &amp; exact</h1></div><div>new body</div>"
-  );
+  assert.equal(note.body, "<div><h1>Original &amp; exact</h1></div><div>new body</div>");
   assert.equal(nameCalls(), 1);
 });
 
@@ -120,34 +108,21 @@ test("raw HTML append adds only its sanitized fragment to exact existing HTML", 
     attachmentNames: ["report.pdf"],
   };
   const { note, nameCalls } = mockNote(fixture, "Exact title");
-  const fragment = prepareContent(
-    "<P>trusted &amp; <STRONG>new</STRONG><BR /></P>",
-    "html",
-    true
-  ).html;
+  const fragment = prepareContent("<P>trusted &amp; <STRONG>new</STRONG><BR /></P>", "html", true).html;
 
   updateNoteContent(note, fragment, "append", "", false);
 
-  assert.equal(
-    note.body,
-    fixture.html + "<p>trusted &amp; <strong>new</strong><br></p>"
-  );
+  assert.equal(note.body, fixture.html + "<p>trusted &amp; <strong>new</strong><br></p>");
   assert.equal(nameCalls(), 0);
 });
 
 test("rich-content detection combines all present kinds", () => {
   const fixture: Fixture = {
     kind: "drawing",
-    html:
-      '<object class="drawing"></object><table></table><input type="checkbox">',
+    html: '<object class="drawing"></object><table></table><input type="checkbox">',
     attachmentNames: ["sketch"],
   };
   const { note } = mockNote(fixture);
 
-  assert.deepEqual(richContentKinds(note, fixture.html), [
-    "attachment",
-    "drawing",
-    "table",
-    "checklist",
-  ]);
+  assert.deepEqual(richContentKinds(note, fixture.html), ["attachment", "drawing", "table", "checklist"]);
 });

@@ -1,9 +1,6 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import {
-  plaintextCache,
-  staleIds,
-} from "../src/cache.js";
+import { plaintextCache, staleIds } from "../src/cache.js";
 
 beforeEach(() => {
   plaintextCache.clear();

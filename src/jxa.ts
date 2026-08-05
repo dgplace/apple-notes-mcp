@@ -1,8 +1,4 @@
-import {
-  execFile,
-  type ExecFileException,
-  type ExecFileOptionsWithStringEncoding,
-} from "node:child_process";
+import { execFile, type ExecFileException, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import { SafeToolError } from "./errors.js";
 
 export const OSASCRIPT_PATH = "/usr/bin/osascript" as const;
@@ -17,7 +13,7 @@ export type JxaProcessExecutor = (
   file: string,
   args: readonly string[],
   options: ExecFileOptionsWithStringEncoding,
-  callback: (error: ExecFileException | null, stdout: string, stderr: string) => void
+  callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
 ) => void;
 
 interface SafeAutomationFailure {
@@ -33,9 +29,7 @@ interface SafeAutomationFailure {
  * temporary directory. Locale is fixed for deterministic UTF-8 JSON. No PATH,
  * dynamic-loader setting, Node option, MCP configuration, or secret is passed.
  */
-export function minimalAutomationEnvironment(
-  source: NodeJS.ProcessEnv = process.env
-): NodeJS.ProcessEnv {
+export function minimalAutomationEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { LANG: "en_US.UTF-8" };
   if (source.HOME) env.HOME = source.HOME;
   if (source.TMPDIR) env.TMPDIR = source.TMPDIR;
@@ -64,7 +58,7 @@ export function runJxaProcess<T>(
   executor: JxaProcessExecutor,
   script: string,
   args: string[] = [],
-  environment: NodeJS.ProcessEnv = process.env
+  environment: NodeJS.ProcessEnv = process.env,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     executor(
@@ -99,7 +93,7 @@ export function runJxaProcess<T>(
           // Never echo unexpected stdout: it can contain a complete note body.
           reject(new Error("Apple Notes automation returned invalid output"));
         }
-      }
+      },
     );
   });
 }

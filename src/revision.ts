@@ -6,12 +6,7 @@
  * percent-encoded component cannot contain the `|` delimiter, so the mapping
  * is collision-free and reversible without depending on a hash library.
  */
-export function revisionToken(
-  noteId: string,
-  accountId: string,
-  folderId: string,
-  modificationTime: string
-): string {
+export function revisionToken(noteId: string, accountId: string, folderId: string, modificationTime: string): string {
   return ["r2", noteId, accountId, folderId, modificationTime]
     .map((component) => encodeURIComponent(component))
     .join("|");

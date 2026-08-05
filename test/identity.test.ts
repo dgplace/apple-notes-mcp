@@ -13,7 +13,7 @@ const {
   `${JXA_IDENTITY_HELPERS}; return {
     folderCatalog, noteIdentityMap, resolveFolderForRead,
     resolveFolderForMutation, resolveNoteForRead, resolveNoteForMutation
-  };`
+  };`,
 )();
 
 interface NoteFixture {
@@ -34,9 +34,9 @@ interface AccountFixture {
   folders: FolderFixture[];
 }
 
-function collection<T extends Record<string, unknown>>(
+function collection<T extends { id: string; name: string }>(
   items: T[],
-  names: string[] = []
+  names: string[] = [],
 ): T[] & { id: () => string[]; name: () => string[] } {
   return Object.assign(items, {
     id: () => items.map((item) => String(item.id)),
@@ -158,15 +158,40 @@ test("folder catalog preserves stable iCloud and On My Mac identities, duplicate
       name,
       account,
       count,
-    })
+    }),
   );
 
   assert.deepEqual(folders, [
-    { id: A_NOTES, name: "Notes", account: { id: A_ACCOUNT, name: "iCloud" }, count: 2 },
-    { id: A_NESTED, name: "Projects", account: { id: A_ACCOUNT, name: "iCloud" }, count: 0 },
-    { id: A_WORK, name: "Work", account: { id: A_ACCOUNT, name: "iCloud" }, count: 0 },
-    { id: B_NOTES, name: "Notes", account: { id: B_ACCOUNT, name: "On My Mac" }, count: 1 },
-    { id: B_WORK, name: "Work", account: { id: B_ACCOUNT, name: "On My Mac" }, count: 1 },
+    {
+      id: A_NOTES,
+      name: "Notes",
+      account: { id: A_ACCOUNT, name: "iCloud" },
+      count: 2,
+    },
+    {
+      id: A_NESTED,
+      name: "Projects",
+      account: { id: A_ACCOUNT, name: "iCloud" },
+      count: 0,
+    },
+    {
+      id: A_WORK,
+      name: "Work",
+      account: { id: A_ACCOUNT, name: "iCloud" },
+      count: 0,
+    },
+    {
+      id: B_NOTES,
+      name: "Notes",
+      account: { id: B_ACCOUNT, name: "On My Mac" },
+      count: 1,
+    },
+    {
+      id: B_WORK,
+      name: "Work",
+      account: { id: B_ACCOUNT, name: "On My Mac" },
+      count: 1,
+    },
   ]);
 });
 
@@ -194,7 +219,7 @@ test("folder read resolution rejects duplicate Notes and Work names with stable 
         assert.match(error.message, new RegExp(A_ACCOUNT.replaceAll("/", "\\/")));
         assert.match(error.message, new RegExp(B_ACCOUNT.replaceAll("/", "\\/")));
         return true;
-      }
+      },
     );
   }
 });
@@ -215,20 +240,14 @@ test("folder read resolution accepts an ordinary unique name and rejects two sel
 
   assert.equal(target.id, A_NESTED);
   assert.deepEqual(target.account, { id: A_ACCOUNT, name: "iCloud" });
-  assert.throws(
-    () => resolveFolderForRead(Notes, A_NESTED, "Projects"),
-    /either folder_id or folder, not both/i
-  );
+  assert.throws(() => resolveFolderForRead(Notes, A_NESTED, "Projects"), /either folder_id or folder, not both/i);
 });
 
 test("folder mutation resolution rejects a name, wrong-kind id, and unknown full id", () => {
   const { Notes } = mockNotes(ACCOUNTS);
   assert.throws(() => resolveFolderForMutation(Notes, "Work"), /must be a full.*ICFolder/i);
   assert.throws(() => resolveFolderForMutation(Notes, A_UNIQUE), /must be a full.*ICFolder/i);
-  assert.throws(
-    () => resolveFolderForMutation(Notes, "x-coredata://A/ICFolder/missing"),
-    /Folder id not found/
-  );
+  assert.throws(() => resolveFolderForMutation(Notes, "x-coredata://A/ICFolder/missing"), /Folder id not found/);
 });
 
 test("read resolver allows a uniquely matching short note id and returns its stable location", () => {
@@ -252,14 +271,8 @@ test("read resolver accepts one exact full note id", () => {
 test("read resolver rejects a note in a configured trash folder by stable identity", () => {
   const { Notes } = mockNotes(ACCOUNTS);
   assert.throws(
-    () =>
-      resolveNoteForRead(
-        Notes,
-        A_UNIQUE,
-        "",
-        [A_NOTES]
-      ),
-    /stable folder ID is configured as Recently Deleted/i
+    () => resolveNoteForRead(Notes, A_UNIQUE, "", [A_NOTES]),
+    /stable folder ID is configured as Recently Deleted/i,
   );
 });
 
@@ -271,13 +284,23 @@ test("title and short-id resolution ignore matching trash candidates before uniq
     {
       id: A_ACCOUNT,
       name: "iCloud",
-      folders: [{ id: A_NOTES, name: "Notes", notes: [{ id: liveId, name: "Same title" }] }],
+      folders: [
+        {
+          id: A_NOTES,
+          name: "Notes",
+          notes: [{ id: liveId, name: "Same title" }],
+        },
+      ],
     },
     {
       id: B_ACCOUNT,
       name: "On My Mac",
       folders: [
-        { id: trashFolderId, name: "Localized trash label", notes: [{ id: trashId, name: "Same title" }] },
+        {
+          id: trashFolderId,
+          name: "Localized trash label",
+          notes: [{ id: trashId, name: "Same title" }],
+        },
       ],
     },
   ]);
@@ -286,7 +309,7 @@ test("title and short-id resolution ignore matching trash candidates before uniq
   assert.equal(resolveNoteForRead(Notes, "collision", "", [trashFolderId]).id, liveId);
   assert.throws(
     () => resolveNoteForRead(Notes, trashId, "", [trashFolderId]),
-    /NOTE_IN_RECENTLY_DELETED|stable folder ID is configured as Recently Deleted/i
+    /NOTE_IN_RECENTLY_DELETED|stable folder ID is configured as Recently Deleted/i,
   );
 });
 
@@ -299,12 +322,24 @@ test("ambiguity diagnostics omit configured-trash candidate identities", () => {
     {
       id: A_ACCOUNT,
       name: "iCloud",
-      folders: [{ id: A_NOTES, name: "Notes", notes: [{ id: aLive, name: "Collision" }] }],
+      folders: [
+        {
+          id: A_NOTES,
+          name: "Notes",
+          notes: [{ id: aLive, name: "Collision" }],
+        },
+      ],
     },
     {
       id: B_ACCOUNT,
       name: "On My Mac",
-      folders: [{ id: trashFolderId, name: "Bin", notes: [{ id: bTrash, name: "Collision" }] }],
+      folders: [
+        {
+          id: trashFolderId,
+          name: "Bin",
+          notes: [{ id: bTrash, name: "Collision" }],
+        },
+      ],
     },
     {
       id: "x-coredata://C/ICAccount/p1",
@@ -326,7 +361,7 @@ test("ambiguity diagnostics omit configured-trash candidate identities", () => {
       assert.match(error.message, new RegExp(cLive));
       assert.doesNotMatch(error.message, new RegExp(bTrash));
       return true;
-    }
+    },
   );
 });
 
@@ -340,7 +375,7 @@ test("read resolver rejects a short id shared across accounts with both full can
         assert.ok(error.message.includes(value), `candidate error omitted ${value}`);
       }
       return true;
-    }
+    },
   );
 });
 
@@ -355,7 +390,7 @@ test("read resolver rejects duplicate titles with account/folder candidate ident
       assert.ok(error.message.includes("iCloud"));
       assert.ok(error.message.includes("On My Mac"));
       return true;
-    }
+    },
   );
 });
 
@@ -367,10 +402,7 @@ test("read resolver rejects unknown and wrong-kind ids", () => {
 
 test("mutation resolver requires a full note id and validates existence before byId", () => {
   const short = mockNotes(ACCOUNTS);
-  assert.throws(
-    () => resolveNoteForMutation(short.Notes, "unique"),
-    /full.*ICNote.*short ids and titles/i
-  );
+  assert.throws(() => resolveNoteForMutation(short.Notes, "unique"), /full.*ICNote.*short ids and titles/i);
   assert.equal(short.byIdCalls(), 0);
 
   const wrongKind = mockNotes(ACCOUNTS);
@@ -378,10 +410,7 @@ test("mutation resolver requires a full note id and validates existence before b
   assert.equal(wrongKind.byIdCalls(), 0);
 
   const unknown = mockNotes(ACCOUNTS);
-  assert.throws(
-    () => resolveNoteForMutation(unknown.Notes, "x-coredata://A/ICNote/missing"),
-    /Note id not found/
-  );
+  assert.throws(() => resolveNoteForMutation(unknown.Notes, "x-coredata://A/ICNote/missing"), /Note id not found/);
   assert.equal(unknown.byIdCalls(), 0);
 });
 

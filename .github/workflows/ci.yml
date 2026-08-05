@@ -27,5 +27,8 @@ jobs:
       # skips prepare, so the explicit build below is a required separate step.
       - run: npm ci --ignore-scripts
       - run: npm run check:dependency-engines
-      - run: npm run build
+      - run: npm run format:check
+      - run: npm run typecheck
       - run: npm test
+      - run: npm run audit:prod
+      - run: npm run build

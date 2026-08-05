@@ -8,7 +8,7 @@ export function parseAllowSharedWrites(value: string | undefined): boolean {
   if (value === undefined || value === "false") return false;
   if (value === "true") return true;
   throw new Error(
-    `Invalid APPLE_NOTES_ALLOW_SHARED_WRITES ${JSON.stringify(value)}. Expected exactly "true" or "false" when present.`
+    `Invalid APPLE_NOTES_ALLOW_SHARED_WRITES ${JSON.stringify(value)}. Expected exactly "true" or "false" when present.`,
   );
 }
 
@@ -17,6 +17,6 @@ export function parseAllowRawHtml(value: string | undefined): boolean {
   if (value === undefined || value === "false") return false;
   if (value === "true") return true;
   throw new Error(
-    `Invalid APPLE_NOTES_ALLOW_RAW_HTML ${JSON.stringify(value)}. Expected exactly "true" or "false" when present.`
+    `Invalid APPLE_NOTES_ALLOW_RAW_HTML ${JSON.stringify(value)}. Expected exactly "true" or "false" when present.`,
   );
 }

@@ -332,8 +332,13 @@ test/               node:test suites (see below)
 
 ```bash
 npm test               # fast unit tests — no Notes.app, no permissions needed
-APPLE_NOTES_TRASH_FOLDER_IDS='x-coredata://.../ICFolder/...' npm run test:integration
-                           # real lifecycle; creates and trashes one test note
+npm run format:check   # deterministic code/config formatting check
+npm run typecheck      # type-check src/ and test/
+npm run audit:prod     # fail on high/critical production dependency findings
+APPLE_NOTES_IT_ACCOUNT_ID='x-coredata://.../ICAccount/...' \
+APPLE_NOTES_TRASH_FOLDER_IDS='x-coredata://.../ICFolder/...' \
+  npm run test:integration
+                       # real isolated lifecycle in the selected test account
 ```
 
 Unit tests cover pure logic — id factoring, body truncation, JXA snippets
@@ -343,9 +348,15 @@ A non-Notes JXA test proves a manipulated `PATH` cannot replace
 permission.
 
 The integration test drives the built server over real JSON-RPC and exercises
-create → search → update → get → trash. It is opt-in (gated on `APPLE_NOTES_IT=1`,
-with `APPLE_NOTES_MODE=read-write` set by the script) because it touches your real Notes library; the test note it
-creates is trashed (moved to Recently Deleted) at the end.
+create → search → update → get → trash. It is opt-in (gated on
+`APPLE_NOTES_IT=1`, with `APPLE_NOTES_MODE=read-write` set by the script) because
+it touches your real Notes library. It requires a full stable ID for an
+explicitly dedicated test account, creates a UUID-named temporary folder and
+note there, and trashes only that exact note ID. Cleanup makes at most one trash
+attempt and never retries when the note is already trashed or the outcome is
+unknown. Notes scripting has no approved recoverable fixture-folder deletion,
+so the test prints the exact folder ID and whether note cleanup was verified for
+manual inspection.
 
 You can also smoke-test by piping JSON-RPC to the server:
 

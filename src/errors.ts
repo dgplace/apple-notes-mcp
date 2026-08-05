@@ -44,10 +44,7 @@ export interface WriteBoundaryContext {
  * is generated locally after a successful automation response, so it has the
  * same unknown-outcome treatment as losing the child response itself.
  */
-export function writeBoundaryError(
-  error: unknown,
-  context: WriteBoundaryContext
-): unknown {
+export function writeBoundaryError(error: unknown, context: WriteBoundaryContext): unknown {
   if (error instanceof SafeToolError && error.code !== "RESULT_TOO_LARGE") {
     return error;
   }
@@ -56,7 +53,7 @@ export function writeBoundaryError(
   if (context.dryRun) {
     return safeError(
       "DRY_RUN_AUTOMATION_FAILED",
-      `The ${context.operation} dry-run automation failed. This call requested no mutation and did not enter the mutation branch. No process output was exposed.`
+      `The ${context.operation} dry-run automation failed. This call requested no mutation and did not enter the mutation branch. No process output was exposed.`,
     );
   }
 
@@ -65,6 +62,6 @@ export function writeBoundaryError(
     : ` in target folder ${(context.folderId ?? "unknown").slice(0, 2048)} with title ${(context.title ?? "unknown").slice(0, 256)}`;
   return safeError(
     "MUTATION_OUTCOME_UNKNOWN",
-    `The ${context.operation} mutation may already have occurred${target}, but automation ended without a complete verified response. Re-read or list the target before retrying; do not retry blindly.`
+    `The ${context.operation} mutation may already have occurred${target}, but automation ended without a complete verified response. Re-read or list the target before retrying; do not retry blindly.`,
   );
 }

@@ -16,10 +16,7 @@ import type { NoteDetail } from "../src/types.js";
 
 test("runtime normalizers enforce limits even when schemas are bypassed", () => {
   assert.equal(normalizePageRequest(1_000_000, 0, 20).limit, READ_LIMITS.maxResults);
-  assert.equal(
-    normalizeBodyPageRequest(1_000_000, 0).maxChars,
-    READ_LIMITS.maxBodyPageChars
-  );
+  assert.equal(normalizeBodyPageRequest(1_000_000, 0).maxChars, READ_LIMITS.maxBodyPageChars);
   assert.equal(normalizeBodyPageRequest(1, 0).maxChars, 1);
   assert.throws(() => normalizeSearchQuery("q".repeat(READ_LIMITS.maxQueryChars + 1)), /hard limit/i);
   assert.throws(() => normalizePageRequest(10, READ_LIMITS.maxOffset + 1, 20), /offset/i);
@@ -48,7 +45,7 @@ test("trash readiness requires exactly one configured folder per discovered acco
   assert.deepEqual(partial.missingAccountIds, ["x-coredata://B/ICAccount/p1"]);
   assert.throws(
     () => assertCompleteTrashConfiguration([aTrash], folders, accounts),
-    /TRASH_CONFIG_INCOMPLETE|No configured trash folder covers.*B\/ICAccount/s
+    /TRASH_CONFIG_INCOMPLETE|No configured trash folder covers.*B\/ICAccount/s,
   );
 
   const duplicate = trashConfigurationStatus([aTrash, aOther, bTrash], folders, accounts);
@@ -56,7 +53,7 @@ test("trash readiness requires exactly one configured folder per discovered acco
   assert.deepEqual(duplicate.duplicateAccountIds, ["x-coredata://A/ICAccount/p1"]);
   assert.throws(
     () => assertCompleteTrashConfiguration([aTrash, aOther, bTrash], folders, accounts),
-    /More than one configured trash folder.*A\/ICAccount/s
+    /More than one configured trash folder.*A\/ICAccount/s,
   );
 
   assert.equal(trashConfigurationStatus([aTrash, bTrash], folders, accounts).ready, true);
@@ -70,7 +67,10 @@ test("metadata pagination is deterministic and the complete result stays within 
   const first = paginateBySerializedSize(items, { limit: 100, offset: 0 }, (page, metadata) => ({
     items: page,
     page: metadata,
-  })) as { items: typeof items; page: { next_offset?: number; truncated: boolean } };
+  })) as {
+    items: typeof items;
+    page: { next_offset?: number; truncated: boolean };
+  };
   assert.ok(first.items.length < 100);
   assert.equal(first.page.truncated, true);
   assert.equal(first.page.next_offset, first.items.length);
@@ -122,6 +122,6 @@ test("summary rich-content metadata is honest when bulk classification is unavai
       available: true,
       byNote: { note: { attachment: true, possibleDrawing: false } },
     }).status,
-    "present"
+    "present",
   );
 });
