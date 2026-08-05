@@ -8,10 +8,10 @@ on:
 
 jobs:
   test:
-    # Build + unit tests need no Notes.app or automation permission, so they run
-    # on the fast Linux runners. The integration test is macOS-only and opt-in
-    # (it touches a real Notes library), so it is not run in CI.
-    runs-on: ubuntu-latest
+    # Build + unit tests need no Notes.app or automation permission. The
+    # integration test touches a real Notes library, so it remains opt-in and
+    # is not run in CI.
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
