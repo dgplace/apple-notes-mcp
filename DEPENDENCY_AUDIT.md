@@ -5,6 +5,10 @@ point-in-time input, not a release rule: every high or critical finding must be
 examined for its installed dependency path and this stdio server's actual import
 and data-flow surface. A zero count is not assumed or required.
 
+The enforced policy and accepted residual exclusion are also recorded in
+[SECURITY.md](./SECURITY.md); this file is the dated evidence and detailed
+reachability review.
+
 ## 2026-08-06 review
 
 Environment: Node `v25.9.0`, npm `11.12.1`, macOS. Commands were run against the

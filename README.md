@@ -34,13 +34,39 @@ examples: an unversioned package request can silently select a different release
 Start read-only, verify what the four read tools expose, and enable writes only
 if you need them.
 
+> [!WARNING]
+> Local Apple automation is only one part of the data path. Tool schemas,
+> requests, note metadata, and requested note content pass through the connected
+> AI client and may be sent off the Mac to its configured model provider under
+> that client's settings and policies. Do not connect this server to a client or
+> provider that is not allowed to receive the notes you may select.
+
 ### Codex (recommended: read-only)
 
-Add this to `~/.codex/config.toml`. The server enforces read-only mode and Codex
-also allowlists only the four read tools:
+Codex reads personal MCP configuration from `~/.codex/config.toml`; a trusted
+project may instead use `.codex/config.toml`. The ChatGPT desktop app, Codex CLI,
+and Codex IDE extension on the same host share these configuration layers. This
+does not apply to ChatGPT web, which does not read local Codex configuration.
+
+Start with discovery only. Add this entry without a trash-folder setting,
+restart the client, call `list_folders`, and record the full stable ID of the
+localized Recently Deleted folder in every discovered account:
 
 ```toml
-[mcp_servers.apple-notes]
+[mcp_servers.apple-notes-discovery]
+command = "npx"
+args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
+env = { APPLE_NOTES_MODE = "read-only" }
+enabled_tools = ["list_folders"]
+default_tools_approval_mode = "auto"
+```
+
+Then delete or disable the discovery entry and add the read-only profile below,
+supplying exactly one comma-separated trash folder ID per account. The server
+enforces read-only mode and Codex allowlists only the four read tools:
+
+```toml
+[mcp_servers.apple-notes-read-only]
 command = "npx"
 args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
 env = { APPLE_NOTES_MODE = "read-only", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
@@ -48,33 +74,58 @@ enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note"]
 default_tools_approval_mode = "auto"
 ```
 
-If writes are required, use this configuration instead. Reads remain automatic,
-while every currently available mutation receives an explicit Codex prompt:
+If writes are required, disable the read-only entry and use this separate
+configuration instead. Reads remain automatic, while every currently available
+mutation receives an explicit Codex prompt. Take a current backup first and
+read [Secure write operation](#secure-write-operation):
 
 ```toml
-[mcp_servers.apple-notes]
+[mcp_servers.apple-notes-read-write]
 command = "npx"
 args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
 env = { APPLE_NOTES_MODE = "read-write", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
 enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "move_note", "trash_note"]
 default_tools_approval_mode = "auto"
 
-[mcp_servers.apple-notes.tools.create_note]
+[mcp_servers.apple-notes-read-write.tools.create_note]
 approval_mode = "prompt"
 
-[mcp_servers.apple-notes.tools.update_note]
+[mcp_servers.apple-notes-read-write.tools.update_note]
 approval_mode = "prompt"
 
-[mcp_servers.apple-notes.tools.move_note]
+[mcp_servers.apple-notes-read-write.tools.move_note]
 approval_mode = "prompt"
 
-[mcp_servers.apple-notes.tools.trash_note]
+[mcp_servers.apple-notes-read-write.tools.trash_note]
 approval_mode = "prompt"
 ```
 
 `enabled_tools` is an allowlist. The per-tool `approval_mode = "prompt"`
 settings override the automatic default for mutations, so each write requires a
 separate decision without prompting unnecessarily for reads.
+
+Official references: [configure MCP servers](https://learn.chatgpt.com/docs/extend/mcp)
+and [agent approvals and security](https://learn.chatgpt.com/docs/agent-approvals-security).
+
+### ChatGPT desktop (recommended: read-only)
+
+1. Open **Settings > MCP servers**.
+2. Select **Add server**.
+3. Enter `apple-notes-discovery`, choose **STDIO**, set the command to `npx`, and
+   set its arguments to `-y` and `@simantaturja/apple-notes-mcp@2.0.0`.
+4. Save the server, then select **Restart**.
+
+Use the same two-phase discovery and read-only configuration shown above. For
+the exact allowlist and environment settings, open the shared
+`~/.codex/config.toml` (in the desktop app: **Settings > Configuration > Open
+config.toml**), add the profile, and restart. Do not configure the local server
+through ChatGPT web: ChatGPT web does not read this file or launch local STDIO
+servers. If write access is necessary, use the separate read-write profile
+above; do not widen the read-only profile in place, and leave each write tool at
+`approval_mode = "prompt"`.
+
+See OpenAI's [MCP setup documentation](https://learn.chatgpt.com/docs/extend/mcp)
+for the current desktop and shared-configuration behavior.
 
 ### Claude Code
 
@@ -158,12 +209,25 @@ Set it in your MCP client config, e.g. for Claude Desktop:
 
 ### Automation permission
 
-The first time a tool runs, macOS will prompt:
+Grant Notes automation only when the first tool call actually needs it. The
+first time the local host process tries to control Notes, macOS normally prompts
+with wording similar to:
 
 > "node" wants access to control "Notes".
 
-Click **Allow**. If you accidentally denied it, re-enable under
-**System Settings → Privacy & Security → Automation**.
+Select **Allow** only if you recognize the MCP client and intended the call. To
+review, grant after an earlier denial, or revoke access, open **System Settings
+> Privacy & Security > Automation**, find the terminal, desktop client, IDE, or
+other host that launches `node`/`/usr/bin/osascript`, and toggle its Notes access.
+The permission is associated with the launching host's identity, not simply
+this package name; macOS releases may label the host or path differently. If you
+change how the server is launched, macOS may prompt again under a different
+entry.
+
+Revocation blocks later Apple Events from that host. It does not undo writes,
+recall tool results already disclosed to a client or model provider, or delete
+copies retained outside Notes. Remove the MCP entry as well if you no longer
+want the client to launch the server.
 
 ### Migrating from 1.x
 
@@ -305,6 +369,57 @@ fails safely and never falls back to its potentially permanent delete command.
   Notes HTML. It does not reconstruct the title or existing rich content.
 - The title is rendered as the note's first line (`<h1>`), which Notes uses as the note name.
 
+### Secure write operation
+
+Before enabling `APPLE_NOTES_MODE=read-write`:
+
+1. Make a current backup or export appropriate to the Notes accounts you will
+   touch and verify that you can restore it. iCloud synchronization and Recently
+   Deleted are not substitutes for a tested backup.
+2. Use the separate read-write client profile above. Keep every write tool at
+   `approval_mode = "prompt"`; inspect the full stable account, folder, and note
+   IDs and the operation preview before approval.
+3. Keep shared writes and raw HTML disabled unless the specific workflow needs
+   them. Use `dry_run=true` before a consequential mutation.
+4. Re-read after any `MUTATION_OUTCOME_UNKNOWN` or post-write verification error.
+   Never blindly retry an uncertain create, update, move, or trash request.
+
+The following Notes limitations remain even with these controls:
+
+- **Accounts and trash:** Notes' public scripting interface does not expose a
+  reliable account type, trash role, recovery guarantee, or shared-note owner.
+  Exactly one full stable Recently Deleted folder ID must be configured for
+  every discovered account. This is evidence of an intended recoverable
+  workflow, not proof that a given account will retain or restore the note.
+- **Names and identity:** Duplicate account, folder, or note names are normal.
+  Names are discovery labels; mutations require full stable IDs. Stable IDs are
+  identifiers, not secrets or authorization tokens, and may change if Notes
+  recreates an object or an account is removed and added again.
+- **Shared notes:** The scripting interface reports shared state but not
+  ownership or exact collaborator impact. A move or trash may affect other
+  people. Shared writes and shared trash therefore require extra startup and
+  per-call gates, but the server cannot predict every synchronization or
+  collaboration consequence.
+- **Locked notes:** Locked content is unavailable and every locked-note write is
+  rejected. Unlocking a note in Notes changes the risk; it does not make its
+  contents safe to send to a model provider.
+- **Rich content:** Attachments, drawings, scans, tables, checklists, audio, and
+  other rich structures are not faithfully representable through the public
+  scripting interface. Whole-body replacement fails closed when supported rich
+  markers are detected unless that call sets `allow_rich_content_loss=true`.
+  Detection is conservative, not a complete Notes document-model parser, so
+  make a backup before any override. Appending preserves the existing body
+  rather than rebuilding it.
+- **HTML:** HTML writes accept only the documented sanitized, attribute-free
+  subset. It cannot preserve arbitrary Notes formatting and is intentionally
+  unsuitable for tables, checklists, media, links, embedded content, or a
+  lossless rich-note round trip.
+- **Integration tests:** The opt-in real-Notes integration test creates a UUID
+  fixture folder in the explicitly selected account and trashes its one fixture
+  note at most once. Notes scripting has no approved recoverable folder-delete
+  operation, so an empty UUID-named folder remains for manual inspection and
+  removal.
+
 ## Development
 
 ```bash
@@ -369,6 +484,57 @@ printf '%s\n' \
 ```
 
 ## Security
+
+See [SECURITY.md](./SECURITY.md) for supported versions, vulnerability
+reporting, safe testing, and the dependency-advisory policy.
+
+### Threat model and trust boundaries
+
+The end-to-end path is:
+
+`Notes data` → `Notes.app` → `local MCP/JXA process` → `MCP client` → `configured model provider`
+
+- **Notes.app and Notes data:** Notes enforces its own accounts, synchronization,
+  locking, and Apple Event behavior. Note titles and bodies are untrusted data.
+  A note can contain malicious prompt text such as instructions to reveal other
+  notes or approve a write. The client and model must treat retrieved content as
+  data, never as authority to call another tool, widen scope, disclose data, or
+  bypass approval. This server bounds results and requires stable IDs, but it
+  cannot make a model immune to prompt injection.
+- **Local MCP/JXA process:** The server is a local STDIO child with the privileges
+  of the user who launched it and whatever Notes Automation permission macOS has
+  granted to that host. It validates untrusted MCP arguments, passes values to
+  fixed JXA programs through `argv`, invokes only `/usr/bin/osascript`, opens no
+  network listener, and does not intentionally perform telemetry. This is not a
+  sandbox around Notes: once authorized, Apple automation may expose notes that
+  the same local user can access. Other processes running as that user, a
+  compromised MCP package/client, or a compromised account are outside this
+  server's protection.
+- **MCP client:** The client is trusted to launch the intended pinned package,
+  preserve the configured tool allowlist, show meaningful approval prompts, and
+  route STDIO without exposing it to other users. Tool schemas, requests, and
+  results are visible to the client. Client history, diagnostics, crash reports,
+  or extensions may create additional copies under that client's own settings.
+  The server avoids logging complete note bodies and gives its automation child
+  a minimal environment, but it cannot control client-side logging.
+- **Model provider:** The client may send tool definitions, arguments, note
+  metadata, and requested content off the Mac to its configured model provider.
+  Local JXA execution does **not** mean the result remains on-device. Provider
+  processing, storage, access, and deletion are governed by the client/provider
+  configuration and policies you selected; this project makes no training or
+  retention promise on their behalf.
+- **Identifiers and outputs:** Full account, folder, and note IDs reduce
+  ambiguity; they do not authenticate a caller and should be treated as metadata
+  that may correlate library objects across results. Notes output, automation
+  errors, and all client arguments remain untrusted at each parser boundary.
+
+Security goals are bounded reads, server-enforced read-only defaults,
+conflict-aware explicit writes, and recoverability-aware trash moves. Non-goals
+include defending a compromised Mac or local user account, providing end-to-end
+encryption through the AI client, guaranteeing provider deletion, replacing
+Notes backups, proving shared-note ownership or collaborator impact, guaranteeing
+Recently Deleted recovery, and losslessly editing every proprietary Notes rich
+content type.
 
 - The server is read-only by default. In that mode write handlers are not
   registered, so stale direct `tools/call` requests are rejected before JXA can run.

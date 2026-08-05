@@ -211,12 +211,12 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** Users understand what remains local, what may be sent to their model provider, and how to operate writes safely.
 
-- [ ] Document trust boundaries among Notes, the local MCP server, the MCP client, and the model provider.
-- [ ] State that tool results may leave the Mac through the connected AI client.
-- [ ] Document macOS Automation permission grant and revocation.
-- [ ] Provide read-only-first setup instructions for Codex and ChatGPT desktop.
-- [ ] Document backup, shared-note, locked-note, rich-content, and account limitations.
-- [ ] Add a security policy (`SECURITY.md`) and private vulnerability-reporting route.
+- [x] Document trust boundaries among Notes, the local MCP server, the MCP client, and the model provider.
+- [x] State that tool results may leave the Mac through the connected AI client.
+- [x] Document macOS Automation permission grant and revocation.
+- [x] Provide read-only-first setup instructions for Codex and ChatGPT desktop.
+- [x] Document backup, shared-note, locked-note, rich-content, and account limitations.
+- [x] Add a security policy (`SECURITY.md`) and private vulnerability-reporting route.
 
 **Acceptance criteria:**
 

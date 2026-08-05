@@ -10,6 +10,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CI formatting, source-and-test type checking, production dependency auditing,
   and an isolated opt-in Notes integration harness scoped to an explicitly
   selected test account and collision-resistant fixture folder.
+- A local-to-provider threat model, read-only-first Codex and ChatGPT desktop
+  setup, secure write/backup guidance, Automation revocation, explicit Notes
+  feature limitations, and a security reporting/advisory policy.
 - Explicit `content_format=plain|html` on create, replace, and append. Plain is
   the default and always escapes markup. Raw HTML requires the separate exact
   `APPLE_NOTES_ALLOW_RAW_HTML=true` startup capability.

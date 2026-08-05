@@ -54,3 +54,8 @@ npm run build            # required: --ignore-scripts skips prepare/dist generat
 Use the issue templates. Include your macOS version, Node version, and the
 macOS locale if the bug touches folder names (see the localization note in the
 README).
+
+Security vulnerabilities are different: do not post exploit details or real
+Notes data in a public issue. Follow the live private reporting route in
+[SECURITY.md](./SECURITY.md) for the repository that shipped the affected
+release.
