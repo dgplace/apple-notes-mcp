@@ -2,11 +2,17 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { runJxa } from "../jxa.js";
 import {
+  JXA_DELETE_NOTE,
   JXA_HTML_HELPERS,
   JXA_RESOLVE_NOTE,
   JXA_UPDATE_NOTE,
 } from "../snippets.js";
 import { ok, fail } from "../helpers.js";
+
+// The special "Recently Deleted" folder is matched by name, which is localized
+// by macOS. Override it for non-English locales via APPLE_NOTES_TRASH_FOLDER,
+// matching the existing read-tool behavior.
+const TRASH_FOLDER = process.env.APPLE_NOTES_TRASH_FOLDER || "Recently Deleted";
 
 export function registerWriteTools(server: McpServer): void {
   server.registerTool(
@@ -150,14 +156,12 @@ export function registerWriteTools(server: McpServer): void {
       try {
         const deleted = await runJxa<{ deleted: boolean; id: string; name: string }>(
           `${JXA_RESOLVE_NOTE}
+          ${JXA_DELETE_NOTE}
           function run(argv) {
             const Notes = Application("Notes");
-            const note = resolveNote(Notes, argv[0], argv[1]);
-            const info = { deleted: true, id: note.id(), name: note.name() };
-            Notes.delete(note);
-            return JSON.stringify(info);
+            return JSON.stringify(deleteNoteSafely(Notes, argv[0], argv[1], argv[2]));
           }`,
-          [id ?? "", title ?? ""]
+          [id ?? "", title ?? "", TRASH_FOLDER]
         );
         return ok(deleted);
       } catch (e) {

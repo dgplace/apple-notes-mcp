@@ -55,9 +55,9 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** `delete_note` cannot permanently erase a note. `Notes.notes` includes Recently Deleted — proven by read tools having to subtract trash ids explicitly (`src/tools/read.ts:99`) — and `resolveNote` (`src/snippets.ts:18`) does not filter it. Calling `delete_note` on an already-trashed note issues a second `Notes.delete()`, which permanently removes it.
 
-- [ ] Determine whether the resolved note is already in Recently Deleted before deleting.
-- [ ] Reject deletion of a note already in Recently Deleted.
-- [ ] Apply the same check to title-based resolution, which reaches trashed notes through `Notes.notes.whose()`.
+- [x] Determine whether the resolved note is already in Recently Deleted before deleting.
+- [x] Reject deletion of a note already in Recently Deleted.
+- [x] Apply the same check to title-based resolution, which reaches trashed notes through `Notes.notes.whose()`.
 
 **Acceptance criteria:**
 

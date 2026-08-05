@@ -92,6 +92,33 @@ export const JXA_RESOLVE_NOTE = `
   }
 `;
 
+// Resolve one mutation target and refuse to issue a second delete when the
+// note is already in a folder matching the configured Recently Deleted name.
+// Folder note ids are fetched in bulk so detection does not add per-note Apple
+// Events. Kept as plain JavaScript for mocked Node tests.
+export const JXA_DELETE_NOTE = `
+  function deleteNoteSafely(Notes, id, title, trashFolderName) {
+    const note = resolveNote(Notes, id, title);
+    const noteId = note.id();
+    const trashFolders = Notes.folders.whose({ name: trashFolderName });
+
+    for (let i = 0; i < trashFolders.length; i++) {
+      const trashedIds = trashFolders[i].notes.id();
+      if (trashedIds.indexOf(noteId) !== -1) {
+        throw new Error(
+          "Refusing to delete note '" + note.name() +
+          "': it is already in " + trashFolderName +
+          " and deleting it again could permanently erase it."
+        );
+      }
+    }
+
+    const info = { deleted: true, id: noteId, name: note.name() };
+    Notes.delete(note);
+    return info;
+  }
+`;
+
 // Bulk Notes.notes.container.name() returns nulls, so folder names are built
 // by iterating folders — one Apple Event per folder, still fast.
 export const JXA_FOLDER_MAP = `

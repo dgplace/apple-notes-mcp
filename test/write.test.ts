@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { JXA_HTML_HELPERS, JXA_UPDATE_NOTE } from "../src/snippets.js";
+import {
+  JXA_DELETE_NOTE,
+  JXA_HTML_HELPERS,
+  JXA_RESOLVE_NOTE,
+  JXA_UPDATE_NOTE,
+} from "../src/snippets.js";
 
 const { richContentKinds, updateNoteContent } = new Function(
   `${JXA_HTML_HELPERS}\n${JXA_UPDATE_NOTE}; return { richContentKinds, updateNoteContent };`
@@ -124,4 +129,133 @@ test("rich-content detection combines all present kinds", () => {
     "table",
     "checklist",
   ]);
+});
+
+const deleteNoteSafely = new Function(
+  `${JXA_RESOLVE_NOTE}\n${JXA_DELETE_NOTE}; return deleteNoteSafely;`
+)();
+
+interface DeleteFixture {
+  id: string;
+  name: string;
+  folder: string;
+}
+
+function mockNotesForDelete(fixtures: DeleteFixture[]) {
+  const deleted: string[] = [];
+  const byId = (id: string) => {
+    const fixture = fixtures.find((candidate) => candidate.id === id);
+    return {
+      id: () => {
+        if (!fixture) throw new Error("invalid id");
+        return fixture.id;
+      },
+      name: () => {
+        if (!fixture) throw new Error("invalid id");
+        return fixture.name;
+      },
+    };
+  };
+
+  const folderNames = [...new Set(fixtures.map((fixture) => fixture.folder))];
+  return {
+    notes: {
+      id: () => fixtures.map((fixture) => fixture.id),
+      byId,
+      whose: ({ name }: { name: string }) =>
+        fixtures
+          .filter((fixture) => fixture.name === name)
+          .map((fixture) => byId(fixture.id)),
+    },
+    folders: {
+      whose: ({ name }: { name: string }) =>
+        folderNames
+          .filter((folderName) => folderName === name)
+          .map((folderName) => ({
+            notes: {
+              id: () =>
+                fixtures
+                  .filter((fixture) => fixture.folder === folderName)
+                  .map((fixture) => fixture.id),
+            },
+          })),
+    },
+    delete: (note: { id: () => string }) => deleted.push(note.id()),
+    deleted,
+  };
+}
+
+const DELETE_FIXTURES: DeleteFixture[] = [
+  { id: "x-coredata://A/ICNote/live", name: "Live note", folder: "Notes" },
+  {
+    id: "x-coredata://A/ICNote/trashed",
+    name: "Trashed note",
+    folder: "Recently Deleted",
+  },
+];
+
+test("delete rejects an already-trashed note resolved by full id before mutation", () => {
+  const Notes = mockNotesForDelete(DELETE_FIXTURES);
+
+  assert.throws(
+    () =>
+      deleteNoteSafely(
+        Notes,
+        "x-coredata://A/ICNote/trashed",
+        "",
+        "Recently Deleted"
+      ),
+    /already in Recently Deleted.*permanently erase/i
+  );
+  assert.deepEqual(Notes.deleted, []);
+});
+
+test("delete rejects an already-trashed note resolved by short id before mutation", () => {
+  const Notes = mockNotesForDelete(DELETE_FIXTURES);
+
+  assert.throws(
+    () => deleteNoteSafely(Notes, "trashed", "", "Recently Deleted"),
+    /already in Recently Deleted/i
+  );
+  assert.deepEqual(Notes.deleted, []);
+});
+
+test("delete rejects an already-trashed note resolved by exact title before mutation", () => {
+  const Notes = mockNotesForDelete(DELETE_FIXTURES);
+
+  assert.throws(
+    () => deleteNoteSafely(Notes, "", "Trashed note", "Recently Deleted"),
+    /already in Recently Deleted/i
+  );
+  assert.deepEqual(Notes.deleted, []);
+});
+
+test("delete allows an ordinary note and returns its mutation result", () => {
+  const Notes = mockNotesForDelete(DELETE_FIXTURES);
+
+  const result = deleteNoteSafely(Notes, "live", "", "Recently Deleted");
+
+  assert.deepEqual(result, {
+    deleted: true,
+    id: "x-coredata://A/ICNote/live",
+    name: "Live note",
+  });
+  assert.deepEqual(Notes.deleted, ["x-coredata://A/ICNote/live"]);
+});
+
+test("delete honors a localized configured trash-folder name", () => {
+  const fixtures: DeleteFixture[] = [
+    {
+      id: "x-coredata://A/ICNote/norsk",
+      name: "Slettet notat",
+      folder: "Nylig slettet",
+    },
+  ];
+  const Notes = mockNotesForDelete(fixtures);
+
+  assert.throws(
+    () => deleteNoteSafely(Notes, "norsk", "", "Nylig slettet"),
+    /already in Nylig slettet/i
+  );
+  assert.deepEqual(Notes.deleted, []);
 });
