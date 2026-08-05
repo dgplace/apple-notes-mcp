@@ -1,7 +1,14 @@
+import { safeError, safeErrorText } from "./errors.js";
+import { READ_LIMITS, serializedToolResultBytes } from "./read-policy.js";
+
 export function ok(data: unknown) {
-  return {
+  const result = {
     content: [{ type: "text" as const, text: JSON.stringify(data) }],
   };
+  if (serializedToolResultBytes(data) > READ_LIMITS.maxResponseBytes) {
+    throw safeError("RESULT_TOO_LARGE", `Tool result exceeds the ${READ_LIMITS.maxResponseBytes}-byte hard limit.`);
+  }
+  return result;
 }
 
 export function fail(error: unknown) {
@@ -9,7 +16,7 @@ export function fail(error: unknown) {
     content: [
       {
         type: "text" as const,
-        text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        text: safeErrorText(error),
       },
     ],
     isError: true,
@@ -27,13 +34,12 @@ export function factorIds(ids: string[]) {
   };
 }
 
-// Cap a note body at maxChars, with a marker telling the model how to fetch
-// the rest.
+// Retained for API compatibility with 1.x consumers. Read tools now page the
+// body inside JXA and return structured continuation metadata instead.
 export function truncateBody(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const total = text.length;
   return (
-    text.slice(0, maxChars) +
-    `\n…[truncated ${total - maxChars} of ${total} chars — re-call with max_chars=${total}]`
+    text.slice(0, maxChars) + `\n…[truncated ${total - maxChars} of ${total} chars — re-call with max_chars=${total}]`
   );
 }

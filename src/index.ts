@@ -1,21 +1,19 @@
 #!/usr/bin/env node
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerReadTools } from "./tools/read.js";
-import { registerWriteTools } from "./tools/write.js";
-
-const server = new McpServer({
-  name: "apple-notes",
-  version: "1.0.0",
-});
-
-registerReadTools(server);
-registerWriteTools(server);
+import { runJxa } from "./jxa.js";
+import { createAppleNotesServer, parseAppleNotesMode } from "./server.js";
+import { parseAllowRawHtml, parseAllowSharedWrites } from "./write-policy.js";
 
 async function main() {
+  const mode = parseAppleNotesMode(process.env.APPLE_NOTES_MODE);
+  const allowSharedWrites = parseAllowSharedWrites(process.env.APPLE_NOTES_ALLOW_SHARED_WRITES);
+  const allowRawHtml = parseAllowRawHtml(process.env.APPLE_NOTES_ALLOW_RAW_HTML);
+  // Production always supplies the fixed /usr/bin/osascript runner. The server
+  // factory accepts a runner only so unit tests can avoid Notes automation.
+  const server = createAppleNotesServer(mode, { allowSharedWrites, allowRawHtml }, runJxa);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("apple-notes MCP server running on stdio");
+  console.error(`apple-notes MCP server running on stdio (${mode})`);
 
   const shutdown = async () => {
     try {

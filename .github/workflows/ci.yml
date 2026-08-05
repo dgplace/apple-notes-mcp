@@ -2,16 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   test:
-    # Build + unit tests need no Notes.app or automation permission, so they run
-    # on the fast Linux runners. The integration test is macOS-only and opt-in
-    # (it touches a real Notes library), so it is not run in CI.
-    runs-on: ubuntu-latest
+    # Build + unit tests need no Notes.app or automation permission. The
+    # integration test touches a real Notes library, so it remains opt-in and
+    # is not run in CI.
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
@@ -23,6 +23,12 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-      - run: npm ci
-      - run: npm run build
+      # Lifecycle scripts are disabled during dependency materialization. This
+      # skips prepare, so the explicit build below is a required separate step.
+      - run: npm ci --ignore-scripts
+      - run: npm run check:dependency-engines
+      - run: npm run format:check
+      - run: npm run typecheck
       - run: npm test
+      - run: npm run audit:prod
+      - run: npm run build

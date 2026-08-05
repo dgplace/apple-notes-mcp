@@ -7,15 +7,106 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- `APPLE_NOTES_TRASH_FOLDER` environment variable to override the
-  "Recently Deleted" folder name on non-English macOS locales.
+- CI formatting, source-and-test type checking, production dependency auditing,
+  and an isolated opt-in Notes integration harness scoped to an explicitly
+  selected test account and collision-resistant fixture folder.
+- A local-to-provider threat model, read-only-first Codex and ChatGPT desktop
+  setup, secure write/backup guidance, Automation revocation, explicit Notes
+  feature limitations, and a security reporting/advisory policy.
+- Explicit `content_format=plain|html` on create, replace, and append. Plain is
+  the default and always escapes markup. Raw HTML requires the separate exact
+  `APPLE_NOTES_ALLOW_RAW_HTML=true` startup capability.
+- Collision-free revision tokens covering stable note/account/folder identity
+  and full-precision modification time. Update,
+  append, move, and trash now require `expected_revision`, support `dry_run`,
+  and perform authoritative post-write verification.
+- `move_note`, addressed only by full stable note and destination-folder IDs.
+- **Breaking:** `delete_note` is replaced by `trash_note`; no legacy alias or
+  permanent-delete operation is registered. Trashing requires literal
+  `confirm=true`, a current revision, and one validated stable configured
+  Recently Deleted destination in the target account.
+- A separate `APPLE_NOTES_ALLOW_SHARED_WRITES=true` capability gate; every
+  shared mutation also requires `allow_shared_note=true` on that call.
+
+### Security
+- JXA now launches only the absolute `/usr/bin/osascript` with a minimal child
+  environment, a 30-second timeout, and a 1 MiB output cap. Process failures
+  remain sanitized, while explicit safe domain errors are preserved.
+- A lost, invalid, timed-out, or oversized response to a mutation-capable call
+  now returns `MUTATION_OUTCOME_UNKNOWN` with stable-target and safe-retry
+  guidance; dry-run failures explicitly state that no mutation branch ran.
+- Runtime and development dependency declarations are exact; the reviewed
+  lockfile and dated dependency-advisory triage are recorded in
+  `DEPENDENCY_AUDIT.md`.
+- Node 18 support is guarded against transitive engine drift; the retained
+  unreachable HTTP advisory is documented instead of forcing an incompatible
+  Node-20-only dependency to obtain a zero audit count.
+- Clean installs use `npm ci --ignore-scripts` followed by an explicit mandatory
+  build, avoiding install-time lifecycle execution without omitting `dist`.
+- Removed body-prefix HTML auto-detection. Enabled raw HTML is parsed into a
+  balanced, attribute-free Notes-compatible subset; scripts, remote resources,
+  event handlers, links, media, tables/checklists, unsupported elements, and
+  malformed markup fail before mutation.
+- Stale revisions fail with `CONFLICT` immediately before mutation. Locked
+  notes, configured-trash targets, and shared writes without both gates fail
+  closed.
+- Trash verification now uses configured stable Recently Deleted folder IDs,
+  not a localized folder name. The operation explicitly moves to that folder
+  and never invokes Notes' delete command, avoiding permanent-erasure escalation
+  if another actor moves the note after preflight.
+- Trash preflight reports the public account ID/name/default-folder/`upgraded` metadata and
+  represents account type as unavailable and ownership as unknown because the
+  public Notes scripting dictionary exposes neither trustworthy property.
+  Configured destination identity is reported as workflow evidence, not as an
+  API-provided recovery guarantee.
+- Shared trashing is rejected by default. When the server shared-write
+  capability is enabled it still requires dedicated `allow_shared_trash=true`
+  and `confirm_shared_impact=true` call gates and reports possible collaborator
+  impact; locked, uncovered-account, stale-destination, and already-trashed
+  cases fail before mutation.
+- Errors after a mutation attempt conservatively warn that the change may have
+  occurred and require re-reading/listing before any retry.
+- Post-write content verification compares exact logical text, title, stable
+  destination, and revision instead of Notes' unstable raw HTML serialization.
+  This accepts formatting-only Notes canonicalization while rejecting textual
+  differences. Append now fails before assignment for detected rich content:
+  Notes exposes no append primitive, so a whole-body rewrite cannot prove that
+  attachments, drawings, tables, or checklists survive.
+
+## [2.0.0] - 2026-08-05
+
+### Added
+- `APPLE_NOTES_MODE=read-only|read-write` with a secure read-only default.
+- MCP server instructions covering the local-server, MCP-client/model-provider,
+  approval, recoverability, shared-note, locked-note, and rich-content boundaries.
+- Stable `APPLE_NOTES_TRASH_FOLDER_IDS` configuration so Recently Deleted is
+  identified independently of its localized display name.
 - Graceful shutdown on `SIGINT`/`SIGTERM`.
 - MIT `LICENSE` file, contribution guide, code of conduct, and issue/PR templates.
 - GitHub Actions CI (build + unit tests on Node 18/20/22).
 
 ### Changed
+- **Breaking:** the server now defaults to read-only and exposes only
+  `list_folders`, `list_notes`, `search_notes`, and `get_note`. Write handlers
+  are not registered, so direct calls using a stale schema are also rejected.
+- Read-write mode preserves the 1.x seven-tool surface.
+- The MCP server and npm package versions are now `2.0.0`.
 - `npm run build` now marks `dist/index.js` executable so the `bin` entry works
   after a git install.
+
+### Security
+
+- Missing `APPLE_NOTES_MODE` fails safely to read-only. Invalid, empty, padded,
+  or case-mismatched values prevent startup.
+- Automated protocol tests verify the advertised tool sets, invalid-mode startup
+  failure, and that stale read-only write calls do not launch JXA.
+
+### Migration
+
+- To restore the 1.x write capability, set exactly
+  `APPLE_NOTES_MODE=read-write` in the MCP server environment.
+- Enabling server write mode does not approve a mutation. Configure the MCP
+  client to prompt separately for every advertised write tool.
 
 ## [1.0.0]
 
