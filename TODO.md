@@ -226,15 +226,15 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 ## Release gates
 
-- [ ] Read-only mode is the default and has direct invocation tests.
-- [ ] No unresolved high-severity security or data-loss finding remains.
-- [ ] `npm audit --omit=dev` reports no high or critical vulnerability that is *reachable from this server*, with any excluded advisory recorded and justified in `SECURITY.md`. A blanket zero-count gate is not usable here: the current 3 high findings are transitive through the MCP SDK (`hono`, `ip-address`) in HTTP, Lambda, and proxy code paths a stdio-only server never executes, so the gate would sit permanently red for issues that cannot be triggered.
-- [ ] Build, type checking, and unit tests pass on all supported Node versions.
-- [ ] Opt-in macOS integration tests pass against isolated ordinary notes.
-- [ ] Shared, locked, rich-content, nonrecoverable-account, and Recently Deleted cases fail closed.
-- [ ] A reviewer has inspected every Notes mutation path.
-- [ ] Documentation accurately describes local processing and model-provider disclosure.
-- [ ] The release is pinned to a reviewed commit.
+- [x] Read-only mode is the default and has direct invocation tests.
+- [x] No unresolved high-severity security or data-loss finding remains.
+- [x] `npm audit --omit=dev` reports no high or critical vulnerability that is *reachable from this server*, with any excluded advisory recorded and justified in `SECURITY.md`. A blanket zero-count gate is not usable here: the initial 3 high findings were transitive through the MCP SDK (`hono`, `ip-address`) in HTTP, Lambda, and proxy code paths a stdio-only server never executes; compatible lockfile updates removed them, while the accepted residual moderate Windows static-file advisory remains unreachable and documented.
+- [x] Build, type checking, and unit tests pass on all supported Node versions.
+- [x] Opt-in macOS integration tests pass against isolated ordinary notes.
+- [x] Shared, locked, rich-content, nonrecoverable-account, and Recently Deleted cases fail closed.
+- [x] A reviewer has inspected every Notes mutation path.
+- [x] Documentation accurately describes local processing and model-provider disclosure.
+- [x] The release is pinned to a reviewed commit.
 
 ## Deferred to a later release
 
