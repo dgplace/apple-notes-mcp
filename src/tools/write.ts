@@ -5,6 +5,7 @@ import {
   JXA_DELETE_NOTE,
   JXA_HTML_HELPERS,
   JXA_IDENTITY_HELPERS,
+  JXA_SAFE_ERRORS,
   JXA_UPDATE_NOTE,
 } from "../snippets.js";
 import { ok, fail } from "../helpers.js";
@@ -49,25 +50,28 @@ export function registerWriteTools(server: McpServer): void {
           account: EntityIdentity;
           folder: EntityIdentity;
         }>(
-          `${JXA_HTML_HELPERS}
+          `${JXA_SAFE_ERRORS}
+          ${JXA_HTML_HELPERS}
           ${JXA_IDENTITY_HELPERS}
           function run(argv) {
-            const title = argv[0];
-            const body = argv[1];
-            const folderId = argv[2];
-            const Notes = Application("Notes");
+            return runSafely(() => {
+              const title = argv[0];
+              const body = argv[1];
+              const folderId = argv[2];
+              const Notes = Application("Notes");
 
-            // Resolve and validate identity before constructing or pushing a note.
-            const target = resolveFolderForMutation(Notes, folderId);
-            const html = "<div><h1>" + escapeHtml(title) + "</h1></div>" + toHtml(body);
-            const note = Notes.Note({ body: html });
-            target.folder.notes.push(note);
+              // Resolve and validate identity before constructing or pushing a note.
+              const target = resolveFolderForMutation(Notes, folderId);
+              const html = "<div><h1>" + escapeHtml(title) + "</h1></div>" + toHtml(body);
+              const note = Notes.Note({ body: html });
+              target.folder.notes.push(note);
 
-            return JSON.stringify({
-              id: note.id(),
-              name: note.name(),
-              account: target.account,
-              folder: { id: target.id, name: target.name },
+              return {
+                id: note.id(),
+                name: note.name(),
+                account: target.account,
+                folder: { id: target.id, name: target.name },
+              };
             });
           }
         `,
@@ -115,26 +119,29 @@ export function registerWriteTools(server: McpServer): void {
           folder: EntityIdentity;
           modified: string;
         }>(
-          `${JXA_HTML_HELPERS}
+          `${JXA_SAFE_ERRORS}
+          ${JXA_HTML_HELPERS}
           ${JXA_IDENTITY_HELPERS}
           ${JXA_UPDATE_NOTE}
           function run(argv) {
-            const Notes = Application("Notes");
-            const target = resolveNoteForMutation(Notes, argv[0]);
-            const note = target.note;
-            const body = argv[1];
-            const mode = argv[2];
-            const newTitle = argv[3];
-            const allowRichContentLoss = argv[4] === "true";
+            return runSafely(() => {
+              const Notes = Application("Notes");
+              const target = resolveNoteForMutation(Notes, argv[0]);
+              const note = target.note;
+              const body = argv[1];
+              const mode = argv[2];
+              const newTitle = argv[3];
+              const allowRichContentLoss = argv[4] === "true";
 
-            updateNoteContent(note, body, mode, newTitle, allowRichContentLoss);
+              updateNoteContent(note, body, mode, newTitle, allowRichContentLoss);
 
-            return JSON.stringify({
-              id: target.id,
-              name: note.name(),
-              account: target.account,
-              folder: target.folder,
-              modified: note.modificationDate().toISOString().slice(0, 19) + "Z",
+              return {
+                id: target.id,
+                name: note.name(),
+                account: target.account,
+                folder: target.folder,
+                modified: note.modificationDate().toISOString().slice(0, 19) + "Z",
+              };
             });
           }`,
           [
@@ -172,12 +179,15 @@ export function registerWriteTools(server: McpServer): void {
           account: EntityIdentity;
           folder: EntityIdentity;
         }>(
-          `${JXA_IDENTITY_HELPERS}
+          `${JXA_SAFE_ERRORS}
+          ${JXA_IDENTITY_HELPERS}
           ${JXA_DELETE_NOTE}
           function run(argv) {
-            const Notes = Application("Notes");
-            const target = resolveNoteForMutation(Notes, argv[0]);
-            return JSON.stringify(deleteNoteSafely(Notes, target, argv[1]));
+            return runSafely(() => {
+              const Notes = Application("Notes");
+              const target = resolveNoteForMutation(Notes, argv[0]);
+              return deleteNoteSafely(Notes, target, argv[1]);
+            });
           }`,
           [id, TRASH_FOLDER]
         );

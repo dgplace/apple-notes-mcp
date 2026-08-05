@@ -41,7 +41,7 @@ also allowlists only the four read tools:
 [mcp_servers.apple-notes]
 command = "npx"
 args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
-env = { APPLE_NOTES_MODE = "read-only" }
+env = { APPLE_NOTES_MODE = "read-only", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
 enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note"]
 default_tools_approval_mode = "auto"
 ```
@@ -53,7 +53,7 @@ while every currently available mutation receives an explicit Codex prompt:
 [mcp_servers.apple-notes]
 command = "npx"
 args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
-env = { APPLE_NOTES_MODE = "read-write" }
+env = { APPLE_NOTES_MODE = "read-write", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
 enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "delete_note"]
 default_tools_approval_mode = "auto"
 
@@ -89,7 +89,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
     "apple-notes": {
       "command": "npx",
       "args": ["-y", "@simantaturja/apple-notes-mcp@2.0.0"],
-      "env": { "APPLE_NOTES_MODE": "read-only" }
+      "env": {
+        "APPLE_NOTES_MODE": "read-only",
+        "APPLE_NOTES_TRASH_FOLDER_IDS": "x-coredata://ACCOUNT/ICFolder/TRASH"
+      }
     }
   }
 }
@@ -118,7 +121,8 @@ claude mcp add apple-notes -- node /absolute/path/to/apple-notes-mcp/dist/index.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `APPLE_NOTES_MODE` | `read-only` | Server-enforced capability mode. The only accepted values are exactly `read-only` and `read-write`; any other present value prevents startup. |
-| `APPLE_NOTES_TRASH_FOLDER` | `Recently Deleted` | Name of the special trash folder. macOS localizes this name; set it to your locale's name (e.g. `Nylig slettet` on Norwegian) so deleted notes are correctly excluded from `list_notes`/`search_notes`. |
+| `APPLE_NOTES_TRASH_FOLDER_IDS` | unset | Comma-separated full stable `ICFolder` IDs, with exactly one Recently Deleted folder for every currently discovered Notes account. Until the mapping is complete, only `list_folders` is usable. |
+| `APPLE_NOTES_TRASH_FOLDER` | `Recently Deleted` | Legacy write-side safety setting used only by `delete_note`; read tools never make a localized-name decision. |
 
 Set it in your MCP client config, e.g. for Claude Desktop:
 
@@ -130,7 +134,7 @@ Set it in your MCP client config, e.g. for Claude Desktop:
       "args": ["-y", "@simantaturja/apple-notes-mcp@2.0.0"],
       "env": {
         "APPLE_NOTES_MODE": "read-only",
-        "APPLE_NOTES_TRASH_FOLDER": "Nylig slettet"
+        "APPLE_NOTES_TRASH_FOLDER_IDS": "x-coredata://ACCOUNT/ICFolder/TRASH"
       }
     }
   }
@@ -165,14 +169,30 @@ write mode alone does not express user intent for an individual operation.
 | Tool | Mode | Description |
 |------|------|-------------|
 | `list_folders` | read-only, read-write | List every folder as a distinct stable `id`/`name`, its stable account `id`/`name`, and note count |
-| `list_notes` | read-only, read-write | List notes (most recently modified first) with stable account/folder identity. Params: `folder_id?` (preferred), unique `folder?` name, `limit` (1–200, default 25) |
-| `search_notes` | read-only, read-write | Case-insensitive search in note titles and bodies with stable account/folder identity. Params: `query`, `limit` (1–100, default 20), `scope` (`all`\|`title`, default all) |
-| `get_note` | read-only, read-write | Read by full or uniquely matching short `id`, or exact unique `title`. Ambiguous selectors return candidate identities. `max_chars` defaults to 10000 |
+| `list_notes` | read-only, read-write | List metadata newest first. Params: `folder_id?`, unique `folder?`, `limit` (hard-capped at 100), `offset`; returns continuation metadata. |
+| `search_notes` | read-only, read-write | Notes-side case-insensitive title/body matching that returns metadata only; plaintext is never returned by search. Query length is capped at 256. Params: `query`, `limit`, `offset`, `scope`. |
+| `get_note` | read-only, read-write | Read one selected live note. `max_chars` defaults to 10000 and clamps at 20000; use `offset`/`page.next_offset` to continue. |
 | `create_note` | read-write | Create in an explicitly selected folder. Params: `title`, `body` (plain text or HTML), required full `folder_id` from `list_folders` |
 | `update_note` | read-write | Replace or append by required full note `id`; titles/short ids are rejected. Also accepts `body`, `mode`, `new_title?`, `allow_rich_content_loss` |
 | `delete_note` | read-write | Ask Notes to move an ordinary note to Recently Deleted, addressed by required full note `id` only |
 
 ### Stable identities
+
+On first start, call `list_folders` and identify the localized Recently Deleted
+folder in each Notes account. Set exactly one full folder ID per account in
+`APPLE_NOTES_TRASH_FOLDER_IDS`, comma-separated, then restart. This bootstrap is
+intentional: Notes' scripting dictionary exposes no stable trash role, so using
+a guessed English folder name would silently leak deleted notes on other
+locales. Note-bearing reads fail closed when the setting is absent or stale;
+they also fail when any newly discovered account is uncovered or multiple
+configured folders belong to one account. `list_folders` remains available for
+discovery and reports missing or duplicate account IDs.
+
+Every successful tool result is capped at 64 KiB including its MCP content
+wrapper. Lists use deterministic offsets, and note bodies are paged inside the
+Notes automation process so an unselected remainder never appears in stdout or
+an error message. Locked notes return metadata with content marked unavailable;
+shared and rich-content state is reported without per-note library scans.
 
 Folder and account names are labels, not mutation targets. Different accounts
 often contain folders with the same name, so `list_folders` keeps those entries
@@ -237,7 +257,7 @@ src/
   jxa.ts            runs JXA scripts via osascript (argv-safe)
   snippets.ts       shared JXA code (HTML escaping, note resolution, folder map)
   helpers.ts        result wrappers, id-prefix factoring, body truncation
-  cache.ts          in-process plaintext cache for body search
+  read-policy.ts    hard input/output bounds and pagination
   types.ts          NoteSummary / NoteDetail
   tools/read.ts     list_folders, list_notes, search_notes, get_note
   tools/write.ts    create_note, update_note, delete_note
@@ -248,7 +268,8 @@ test/               node:test suites (see below)
 
 ```bash
 npm test               # fast unit tests — no Notes.app, no permissions needed
-npm run test:integration   # full lifecycle against real Notes.app (creates + deletes a test note)
+APPLE_NOTES_TRASH_FOLDER_IDS='x-coredata://.../ICFolder/...' npm run test:integration
+                           # real lifecycle; creates and trashes one test note
 ```
 
 Unit tests cover pure logic — id factoring, body truncation, JXA snippets
@@ -288,7 +309,9 @@ printf '%s\n' \
   full stable note IDs, and create accepts only a full stable folder ID.
 - Short note IDs are display/read conveniences only. A read must prove the
   suffix unique; mutations require the reconstructed full `x-coredata` ID.
-- Notes in Recently Deleted are excluded from `list_notes`/`search_notes` (pass `folder: "Recently Deleted"` to list them explicitly). Note: the folder is matched by name (default `Recently Deleted`); on a non-English macOS locale, set `APPLE_NOTES_TRASH_FOLDER` (see [Environment variables](#environment-variables)) so the exclusion applies.
+- Note-bearing reads require configured stable Recently Deleted folder IDs and
+  exclude those IDs from every locale. `get_note` rejects a selected trashed
+  note; there is no folder-name override that can bypass this boundary.
 - Locked notes may be rejected by Notes and shared-note writes are not yet
   independently gated. Do not mutate either without understanding the account
   and collaboration impact.
@@ -313,21 +336,10 @@ notes in a single event (`Notes.notes.name()` returns every name at once):
 Per note that is roughly **650× faster**, and it's why end-to-end tool calls stay
 in the 300–550 ms range *including* Node and osascript process startup.
 
-**2. Incremental plaintext cache.**
-Note bodies are cached in-process, keyed by note id and validated against each
-note's `modificationDate` — so a cache entry self-invalidates the moment a note
-changes, and deletes are evicted automatically. Each search after the first only
-re-fetches notes that actually changed:
-
-| Search | Measured |
-|---|---|
-| First search of a session (cold cache) | ~430 ms |
-| Every following search (warm cache) | ~180 ms |
-| Title-only search (`scope: "title"`) | ~160 ms |
-
-There is no staleness window: metadata is checked live on every call, so results
-are always current — unlike index-based servers that serve stale results between
-re-indexing runs.
+**2. Notes-side search without body export.**
+Search predicates execute in Notes.app and return matching IDs. The server then
+bulk-fetches metadata for those matches; it does not retrieve, cache, log, or
+return note plaintext during search.
 
 **3. No index, no embeddings, no warm-up.**
 RAG-based servers (LanceDB + embedding models) need a ~200 MB model download, an
@@ -343,10 +355,9 @@ Server is up and answering in ~125 ms.
 Servers that read the Notes SQLite database need Full Disk Access and break when
 Apple changes the schema. JXA is the supported automation interface.
 
-Fit guidance: designed for libraries up to a few thousand notes. The cold-cache
-search grows with library size (one bulk body fetch); warm searches stay flat. At
-many thousands of large notes, an indexed/semantic-search server will answer the
-*first* search faster — in exchange for the indexing machinery above.
+Fit guidance: designed for libraries up to a few thousand notes. At many
+thousands of notes, an indexed/semantic-search server may answer complex searches
+faster, in exchange for indexing machinery and a separate stale-data boundary.
 
 ## Why it consumes few tokens
 
@@ -360,9 +371,9 @@ every call. Both are kept deliberately small:
   prefix; list/search return it once as `idPrefix` with short per-note ids (`p634`).
   Read resolution accepts a uniquely matching short form; mutations require the
   reconstructed full form.
-- **Bounded responses** — `get_note` caps bodies at `max_chars` (default 10,000
-  chars ≈ 2,500 tokens) with a truncation marker telling the model exactly how to
-  fetch the rest. A single huge note can never flood the context.
+- **Bounded responses** — every complete result wrapper is at most 64 KiB.
+  `get_note` clamps `max_chars` to 20,000 and returns `page.next_offset`; list
+  tools return the same deterministic continuation metadata.
 - **No noise** — stable identity is represented by compact `id`/`name` objects,
   dates omit milliseconds, and bodies are plaintext rather than raw HTML.
 

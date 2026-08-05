@@ -42,6 +42,12 @@ function startServer(
   extraEnv: NodeJS.ProcessEnv = {}
 ): ServerProcess {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  if (
+    Object.prototype.hasOwnProperty.call(extraEnv, "APPLE_NOTES_TRASH_FOLDER_IDS") &&
+    extraEnv.APPLE_NOTES_TRASH_FOLDER_IDS === undefined
+  ) {
+    delete env.APPLE_NOTES_TRASH_FOLDER_IDS;
+  }
   if (mode === undefined) delete env.APPLE_NOTES_MODE;
   else env.APPLE_NOTES_MODE = mode;
 
@@ -327,6 +333,119 @@ test("direct stale write calls in read-only mode are rejected without launching 
     await assert.rejects(access(marker), { code: "ENOENT" });
   } finally {
     await server.stop();
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("trash bootstrap permits folder discovery but blocks every note-bearing read", async () => {
+  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-trash-bootstrap-"));
+  const marker = join(fakeBin, "jxa-launched");
+  const fakeOsascript = join(fakeBin, "osascript");
+  await writeFile(
+    fakeOsascript,
+    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nprintf \'{"accountIds":[],"folders":[]}\'\n'
+  );
+  await chmod(fakeOsascript, 0o755);
+
+  const server = startServer("read-only", {
+    PATH: fakeBin,
+    APPLE_NOTES_JXA_MARKER: marker,
+    APPLE_NOTES_TRASH_FOLDER_IDS: undefined,
+  });
+  try {
+    await initialize(server);
+    const discovery = await server.request("tools/call", {
+      name: "list_folders",
+      arguments: {},
+    });
+    assert.equal(discovery.result?.isError, undefined);
+    const payload = JSON.parse(discovery.result?.content?.[0]?.text ?? "null");
+    assert.equal(payload.trash_configuration.ready, false);
+    await rm(marker, { force: true });
+
+    for (const call of [
+      { name: "list_notes", arguments: {} },
+      { name: "search_notes", arguments: { query: "private" } },
+      { name: "get_note", arguments: { id: "x-coredata://A/ICNote/p1" } },
+    ]) {
+      const response = await server.request("tools/call", call);
+      assert.equal(response.result?.isError, true);
+      assert.match(response.result?.content?.[0]?.text ?? "", /TRASH_CONFIG_REQUIRED/);
+    }
+    await assert.rejects(access(marker), { code: "ENOENT" });
+  } finally {
+    await server.stop();
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("partial multi-account trash configuration is not ready and blocks reads", async () => {
+  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-trash-partial-"));
+  const fakeOsascript = join(fakeBin, "osascript");
+  const accountA = "x-coredata://A/ICAccount/p1";
+  const accountB = "x-coredata://B/ICAccount/p1";
+  const trashA = "x-coredata://A/ICFolder/trash";
+  const trashB = "x-coredata://B/ICFolder/trash";
+  const folderPayload = JSON.stringify({
+    accountIds: [accountA, accountB],
+    folders: [
+      { id: trashA, name: "Bin A", account: { id: accountA, name: "A" }, count: 0 },
+      { id: trashB, name: "Bin B", account: { id: accountB, name: "B" }, count: 0 },
+    ],
+  });
+  await writeFile(fakeOsascript, `#!/bin/sh\nprintf '%s' '${folderPayload}'\n`);
+  await chmod(fakeOsascript, 0o755);
+
+  const discoveryServer = startServer("read-only", {
+    PATH: fakeBin,
+    APPLE_NOTES_TRASH_FOLDER_IDS: trashA,
+  });
+  try {
+    await initialize(discoveryServer);
+    const response = await discoveryServer.request("tools/call", {
+      name: "list_folders",
+      arguments: {},
+    });
+    const payload = JSON.parse(response.result?.content?.[0]?.text ?? "null");
+    assert.equal(payload.trash_configuration.ready, false);
+    assert.deepEqual(payload.trash_configuration.missing_account_ids, [accountB]);
+  } finally {
+    await discoveryServer.stop();
+  }
+
+  const metadataPayload = JSON.stringify({
+    ids: [],
+    names: [],
+    modified: [],
+    locked: [],
+    shared: [],
+    folderIds: [trashA, trashB],
+    folderAccounts: [
+      { id: trashA, accountId: accountA },
+      { id: trashB, accountId: accountB },
+    ],
+    accountIds: [accountA, accountB],
+    location: null,
+    locations: {},
+    rich: { available: true, byNote: {} },
+  });
+  await writeFile(fakeOsascript, `#!/bin/sh\nprintf '%s' '${metadataPayload}'\n`);
+  await chmod(fakeOsascript, 0o755);
+  const readServer = startServer("read-only", {
+    PATH: fakeBin,
+    APPLE_NOTES_TRASH_FOLDER_IDS: trashA,
+  });
+  try {
+    await initialize(readServer);
+    const response = await readServer.request("tools/call", {
+      name: "list_notes",
+      arguments: {},
+    });
+    assert.equal(response.result?.isError, true);
+    assert.match(response.result?.content?.[0]?.text ?? "", /TRASH_CONFIG_INCOMPLETE/);
+    assert.match(response.result?.content?.[0]?.text ?? "", new RegExp(accountB));
+  } finally {
+    await readServer.stop();
     await rm(fakeBin, { recursive: true, force: true });
   }
 });

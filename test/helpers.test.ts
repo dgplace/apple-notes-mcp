@@ -43,5 +43,9 @@ test("ok wraps data as compact JSON", () => {
 test("fail wraps an Error message and sets isError", () => {
   const res = fail(new Error("boom"));
   assert.equal(res.isError, true);
-  assert.equal(res.content[0].text, "Error: boom");
+  assert.equal(
+    res.content[0].text,
+    "Error [AUTOMATION_FAILED]: Apple Notes automation failed without a safe diagnostic."
+  );
+  assert.doesNotMatch(res.content[0].text, /boom/);
 });

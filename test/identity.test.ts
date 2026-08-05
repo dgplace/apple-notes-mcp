@@ -249,6 +249,87 @@ test("read resolver accepts one exact full note id", () => {
   assert.equal(target.note.name(), "Cloud unique");
 });
 
+test("read resolver rejects a note in a configured trash folder by stable identity", () => {
+  const { Notes } = mockNotes(ACCOUNTS);
+  assert.throws(
+    () =>
+      resolveNoteForRead(
+        Notes,
+        A_UNIQUE,
+        "",
+        [A_NOTES]
+      ),
+    /stable folder ID is configured as Recently Deleted/i
+  );
+});
+
+test("title and short-id resolution ignore matching trash candidates before uniqueness", () => {
+  const liveId = "x-coredata://A/ICNote/collision";
+  const trashId = "x-coredata://B/ICNote/collision";
+  const trashFolderId = "x-coredata://B/ICFolder/trash";
+  const { Notes } = mockNotes([
+    {
+      id: A_ACCOUNT,
+      name: "iCloud",
+      folders: [{ id: A_NOTES, name: "Notes", notes: [{ id: liveId, name: "Same title" }] }],
+    },
+    {
+      id: B_ACCOUNT,
+      name: "On My Mac",
+      folders: [
+        { id: trashFolderId, name: "Localized trash label", notes: [{ id: trashId, name: "Same title" }] },
+      ],
+    },
+  ]);
+
+  assert.equal(resolveNoteForRead(Notes, "", "Same title", [trashFolderId]).id, liveId);
+  assert.equal(resolveNoteForRead(Notes, "collision", "", [trashFolderId]).id, liveId);
+  assert.throws(
+    () => resolveNoteForRead(Notes, trashId, "", [trashFolderId]),
+    /NOTE_IN_RECENTLY_DELETED|stable folder ID is configured as Recently Deleted/i
+  );
+});
+
+test("ambiguity diagnostics omit configured-trash candidate identities", () => {
+  const aLive = "x-coredata://A/ICNote/collision";
+  const bTrash = "x-coredata://B/ICNote/collision";
+  const cLive = "x-coredata://C/ICNote/collision";
+  const trashFolderId = "x-coredata://B/ICFolder/trash";
+  const { Notes } = mockNotes([
+    {
+      id: A_ACCOUNT,
+      name: "iCloud",
+      folders: [{ id: A_NOTES, name: "Notes", notes: [{ id: aLive, name: "Collision" }] }],
+    },
+    {
+      id: B_ACCOUNT,
+      name: "On My Mac",
+      folders: [{ id: trashFolderId, name: "Bin", notes: [{ id: bTrash, name: "Collision" }] }],
+    },
+    {
+      id: "x-coredata://C/ICAccount/p1",
+      name: "Work account",
+      folders: [
+        {
+          id: "x-coredata://C/ICFolder/notes",
+          name: "Notes",
+          notes: [{ id: cLive, name: "Collision" }],
+        },
+      ],
+    },
+  ]);
+
+  assert.throws(
+    () => resolveNoteForRead(Notes, "collision", "", [trashFolderId]),
+    (error: Error) => {
+      assert.match(error.message, new RegExp(aLive));
+      assert.match(error.message, new RegExp(cLive));
+      assert.doesNotMatch(error.message, new RegExp(bTrash));
+      return true;
+    }
+  );
+});
+
 test("read resolver rejects a short id shared across accounts with both full candidates", () => {
   const { Notes } = mockNotes(ACCOUNTS);
   assert.throws(

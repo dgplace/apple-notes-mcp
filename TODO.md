@@ -107,13 +107,13 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** The model receives only the requested note data and cannot request unbounded output. `max_chars` currently has a floor of 100 and no ceiling (`src/tools/read.ts:255`), and `runJxa` allows a 64 MB buffer (`src/jxa.ts:13`).
 
-- [ ] Add hard limits for result counts, query length, note size, and total response size.
-- [ ] Add an explicit upper bound to `max_chars` and clamp rather than trust the caller.
-- [ ] Return pagination or continuation metadata for truncated lists and notes.
-- [ ] Exclude Recently Deleted by folder identity rather than a localized folder name.
-- [ ] Exclude Recently Deleted from `get_note`, which currently reads trashed notes with no filter.
-- [ ] Mark locked, shared, and rich-content notes in metadata without exposing unavailable content.
-- [ ] Keep note bodies out of logs and sanitize automation errors before returning them — `fail()` forwards raw `osascript` stderr.
+- [x] Add hard limits for result counts, query length, note size, and total response size.
+- [x] Add an explicit upper bound to `max_chars` and clamp rather than trust the caller.
+- [x] Return pagination or continuation metadata for truncated lists and notes.
+- [x] Exclude Recently Deleted by folder identity rather than a localized folder name.
+- [x] Exclude Recently Deleted from `get_note`, which currently reads trashed notes with no filter.
+- [x] Mark locked, shared, and rich-content notes in metadata without exposing unavailable content.
+- [x] Keep note bodies out of logs and sanitize automation errors before returning them — `fail()` forwards raw `osascript` stderr.
 
 **Acceptance criteria:**
 

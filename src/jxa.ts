@@ -1,4 +1,11 @@
 import { execFile } from "node:child_process";
+import { SafeToolError } from "./errors.js";
+
+interface SafeAutomationFailure {
+  __appleNotesSafeError: true;
+  code: string;
+  message: string;
+}
 
 /**
  * Run a JXA (JavaScript for Automation) script via osascript.
@@ -10,17 +17,32 @@ export function runJxa<T>(script: string, args: string[] = []): Promise<T> {
     execFile(
       "osascript",
       ["-l", "JavaScript", "-e", script, "--", ...args],
-      { maxBuffer: 64 * 1024 * 1024, timeout: 120_000 },
+      // Bound even malformed/unexpected automation output. Normal read
+      // results are far smaller (the public MCP result ceiling is 64 KiB).
+      { maxBuffer: 8 * 1024 * 1024, timeout: 120_000 },
       (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(stderr.trim() || error.message));
+          // stderr and Error.message can include script source, argv, or Notes
+          // content. They are deliberately not copied into the returned error.
+          reject(new Error("Apple Notes automation process failed"));
           return;
         }
         const out = stdout.trim();
         try {
-          resolve(JSON.parse(out) as T);
+          const parsed = JSON.parse(out) as T | SafeAutomationFailure;
+          if (
+            typeof parsed === "object" &&
+            parsed !== null &&
+            "__appleNotesSafeError" in parsed &&
+            parsed.__appleNotesSafeError === true
+          ) {
+            reject(new SafeToolError(parsed.code, parsed.message));
+            return;
+          }
+          resolve(parsed as T);
         } catch {
-          reject(new Error(`Unexpected osascript output: ${out.slice(0, 500)}`));
+          // Never echo unexpected stdout: it can contain a complete note body.
+          reject(new Error("Apple Notes automation returned invalid output"));
         }
       }
     );
