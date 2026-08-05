@@ -70,25 +70,175 @@ export const JXA_UPDATE_NOTE = `
   }
 `;
 
-export const JXA_RESOLVE_NOTE = `
-  function resolveNote(Notes, id, title) {
-    if (id !== "") {
-      let fullId = id;
-      if (!id.startsWith("x-coredata://")) {
-        // Short id from list_notes/search_notes — resolve against full ids
-        const ids = Notes.notes.id();
-        fullId = ids.find(x => x.endsWith("/" + id));
-        if (!fullId) throw new Error("Note id not found: " + id);
+// Stable identity and target resolution. Accounts and folders form a bounded
+// tree, so walking them costs bulk property accesses per account/folder rather
+// than one Apple Event per note. Note properties themselves stay bulk fetched.
+// These helpers deliberately keep read and mutation resolution separate:
+// reads may prove a short id or name unique, while mutations require a full id.
+export const JXA_IDENTITY_HELPERS = `
+  function isFullEntityId(id, kind) {
+    return id.startsWith("x-coredata://") && id.indexOf("/" + kind + "/") !== -1;
+  }
+
+  function folderCatalog(Notes, includeCounts) {
+    const result = [];
+    const seen = {};
+    const accounts = Notes.accounts;
+    const accountIds = accounts.id();
+    const accountNames = accounts.name();
+
+    function walk(folders, account) {
+      const ids = folders.id();
+      const names = folders.name();
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        if (seen[id]) continue;
+        seen[id] = true;
+        const folder = folders[i];
+        const item = {
+          id: id,
+          name: names[i],
+          account: { id: account.id, name: account.name },
+          folder: folder,
+        };
+        if (includeCounts) item.count = folder.notes.length;
+        result.push(item);
+        walk(folder.folders, account);
       }
-      const note = Notes.notes.byId(fullId);
-      note.name(); // throws if id is invalid
-      return note;
     }
-    const matches = Notes.notes.whose({ name: title });
-    if (matches.length === 0) throw new Error("Note not found: " + title);
-    if (matches.length > 1)
-      throw new Error("Multiple notes titled '" + title + "' — use id instead.");
-    return matches[0];
+
+    for (let i = 0; i < accountIds.length; i++) {
+      walk(accounts[i].folders, { id: accountIds[i], name: accountNames[i] });
+    }
+    return result;
+  }
+
+  function noteIdentityMap(Notes) {
+    const map = {};
+    const folders = folderCatalog(Notes, false);
+    for (let i = 0; i < folders.length; i++) {
+      const folder = folders[i];
+      const noteIds = folder.folder.notes.id();
+      for (let j = 0; j < noteIds.length; j++) {
+        map[noteIds[j]] = {
+          account: folder.account,
+          folder: { id: folder.id, name: folder.name },
+        };
+      }
+    }
+    return map;
+  }
+
+  function folderCandidateLabel(candidate) {
+    return candidate.id + " [account " + candidate.account.name +
+      " (" + candidate.account.id + "), folder " + candidate.name + "]";
+  }
+
+  function noteCandidateLabel(id, location) {
+    if (!location) return id + " [account/folder identity unavailable]";
+    return id + " [account " + location.account.name +
+      " (" + location.account.id + "), folder " + location.folder.name +
+      " (" + location.folder.id + ")]";
+  }
+
+  function resolveFolderForRead(Notes, id, name) {
+    if (id !== "" && name !== "") {
+      throw new Error("Provide either folder_id or folder, not both.");
+    }
+    const catalog = folderCatalog(Notes, false);
+    let matches;
+    if (id !== "") {
+      if (!isFullEntityId(id, "ICFolder")) {
+        throw new Error("folder_id must be a full x-coredata://.../ICFolder/... id from list_folders.");
+      }
+      matches = catalog.filter(candidate => candidate.id === id);
+      if (matches.length === 0) throw new Error("Folder id not found: " + id);
+    } else {
+      matches = catalog.filter(candidate => candidate.name === name);
+      if (matches.length === 0) throw new Error("Folder not found: " + name);
+      if (matches.length > 1) {
+        throw new Error(
+          "Folder name '" + name + "' is ambiguous. Retry with folder_id. Candidates: " +
+          matches.map(folderCandidateLabel).join("; ")
+        );
+      }
+    }
+    const [match] = matches;
+    return match;
+  }
+
+  function resolveFolderForMutation(Notes, id) {
+    if (!isFullEntityId(id, "ICFolder")) {
+      throw new Error("folder_id must be a full x-coredata://.../ICFolder/... id from list_folders.");
+    }
+    const matches = folderCatalog(Notes, false).filter(candidate => candidate.id === id);
+    if (matches.length === 0) throw new Error("Folder id not found: " + id);
+    if (matches.length > 1) throw new Error("Folder id is not unique: " + id);
+    const [match] = matches;
+    return match;
+  }
+
+  function resolveNoteForRead(Notes, id, title) {
+    if (id !== "" && title !== "") {
+      throw new Error("Provide either id or title, not both.");
+    }
+    const ids = Notes.notes.id();
+    const names = Notes.notes.name();
+    let candidateIds = [];
+
+    if (id !== "") {
+      if (id.startsWith("x-coredata://") && !isFullEntityId(id, "ICNote")) {
+        throw new Error("id is not a note id: " + id);
+      }
+      candidateIds = isFullEntityId(id, "ICNote")
+        ? ids.filter(candidate => candidate === id)
+        : ids.filter(candidate => candidate.endsWith("/" + id));
+      if (candidateIds.length === 0) throw new Error("Note id not found: " + id);
+    } else {
+      for (let i = 0; i < ids.length; i++) {
+        if (names[i] === title) candidateIds.push(ids[i]);
+      }
+      if (candidateIds.length === 0) throw new Error("Note not found: " + title);
+    }
+
+    const identities = noteIdentityMap(Notes);
+    if (candidateIds.length > 1) {
+      const selector = id !== "" ? "Note id '" + id + "'" : "Note title '" + title + "'";
+      throw new Error(
+        selector + " is ambiguous. Retry with a full note id. Candidates: " +
+        candidateIds.map(candidate => noteCandidateLabel(candidate, identities[candidate])).join("; ")
+      );
+    }
+
+    const fullId = candidateIds[0];
+    const location = identities[fullId];
+    if (!location) {
+      throw new Error("Stable account/folder identity unavailable for note: " + fullId);
+    }
+    return {
+      note: Notes.notes.byId(fullId),
+      id: fullId,
+      account: location.account,
+      folder: location.folder,
+    };
+  }
+
+  function resolveNoteForMutation(Notes, id) {
+    if (!isFullEntityId(id, "ICNote")) {
+      throw new Error("id must be a full x-coredata://.../ICNote/... id; short ids and titles are read-only selectors.");
+    }
+    const ids = Notes.notes.id();
+    if (ids.indexOf(id) === -1) throw new Error("Note id not found: " + id);
+    const location = noteIdentityMap(Notes)[id];
+    if (!location) {
+      throw new Error("Stable account/folder identity unavailable for note: " + id);
+    }
+    return {
+      note: Notes.notes.byId(id),
+      id: id,
+      account: location.account,
+      folder: location.folder,
+    };
   }
 `;
 
@@ -97,9 +247,9 @@ export const JXA_RESOLVE_NOTE = `
 // Folder note ids are fetched in bulk so detection does not add per-note Apple
 // Events. Kept as plain JavaScript for mocked Node tests.
 export const JXA_DELETE_NOTE = `
-  function deleteNoteSafely(Notes, id, title, trashFolderName) {
-    const note = resolveNote(Notes, id, title);
-    const noteId = note.id();
+  function deleteNoteSafely(Notes, target, trashFolderName) {
+    const note = target.note;
+    const noteId = target.id;
     const trashFolders = Notes.folders.whose({ name: trashFolderName });
 
     for (let i = 0; i < trashFolders.length; i++) {
@@ -113,23 +263,14 @@ export const JXA_DELETE_NOTE = `
       }
     }
 
-    const info = { deleted: true, id: noteId, name: note.name() };
+    const info = {
+      deleted: true,
+      id: noteId,
+      name: note.name(),
+      account: target.account,
+      folder: target.folder,
+    };
     Notes.delete(note);
     return info;
-  }
-`;
-
-// Bulk Notes.notes.container.name() returns nulls, so folder names are built
-// by iterating folders — one Apple Event per folder, still fast.
-export const JXA_FOLDER_MAP = `
-  function noteFolderMap(Notes) {
-    const map = {};
-    const folders = Notes.folders;
-    const fnames = folders.name();
-    for (let i = 0; i < fnames.length; i++) {
-      const ids = folders[i].notes.id();
-      for (const id of ids) map[id] = fnames[i];
-    }
-    return map;
   }
 `;

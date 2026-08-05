@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   JXA_DELETE_NOTE,
   JXA_HTML_HELPERS,
-  JXA_RESOLVE_NOTE,
   JXA_UPDATE_NOTE,
 } from "../src/snippets.js";
 
@@ -132,7 +131,7 @@ test("rich-content detection combines all present kinds", () => {
 });
 
 const deleteNoteSafely = new Function(
-  `${JXA_RESOLVE_NOTE}\n${JXA_DELETE_NOTE}; return deleteNoteSafely;`
+  `${JXA_DELETE_NOTE}; return deleteNoteSafely;`
 )();
 
 interface DeleteFixture {
@@ -159,14 +158,6 @@ function mockNotesForDelete(fixtures: DeleteFixture[]) {
 
   const folderNames = [...new Set(fixtures.map((fixture) => fixture.folder))];
   return {
-    notes: {
-      id: () => fixtures.map((fixture) => fixture.id),
-      byId,
-      whose: ({ name }: { name: string }) =>
-        fixtures
-          .filter((fixture) => fixture.name === name)
-          .map((fixture) => byId(fixture.id)),
-    },
     folders: {
       whose: ({ name }: { name: string }) =>
         folderNames
@@ -182,6 +173,15 @@ function mockNotesForDelete(fixtures: DeleteFixture[]) {
     },
     delete: (note: { id: () => string }) => deleted.push(note.id()),
     deleted,
+    target: (id: string) => ({
+      note: byId(id),
+      id,
+      account: { id: "x-coredata://A/ICAccount/p1", name: "iCloud" },
+      folder: {
+        id: `x-coredata://A/ICFolder/${fixtures.find((fixture) => fixture.id === id)?.folder}`,
+        name: fixtures.find((fixture) => fixture.id === id)?.folder,
+      },
+    }),
   };
 }
 
@@ -201,8 +201,7 @@ test("delete rejects an already-trashed note resolved by full id before mutation
     () =>
       deleteNoteSafely(
         Notes,
-        "x-coredata://A/ICNote/trashed",
-        "",
+        Notes.target("x-coredata://A/ICNote/trashed"),
         "Recently Deleted"
       ),
     /already in Recently Deleted.*permanently erase/i
@@ -210,35 +209,18 @@ test("delete rejects an already-trashed note resolved by full id before mutation
   assert.deepEqual(Notes.deleted, []);
 });
 
-test("delete rejects an already-trashed note resolved by short id before mutation", () => {
-  const Notes = mockNotesForDelete(DELETE_FIXTURES);
-
-  assert.throws(
-    () => deleteNoteSafely(Notes, "trashed", "", "Recently Deleted"),
-    /already in Recently Deleted/i
-  );
-  assert.deepEqual(Notes.deleted, []);
-});
-
-test("delete rejects an already-trashed note resolved by exact title before mutation", () => {
-  const Notes = mockNotesForDelete(DELETE_FIXTURES);
-
-  assert.throws(
-    () => deleteNoteSafely(Notes, "", "Trashed note", "Recently Deleted"),
-    /already in Recently Deleted/i
-  );
-  assert.deepEqual(Notes.deleted, []);
-});
-
 test("delete allows an ordinary note and returns its mutation result", () => {
   const Notes = mockNotesForDelete(DELETE_FIXTURES);
 
-  const result = deleteNoteSafely(Notes, "live", "", "Recently Deleted");
+  const target = Notes.target("x-coredata://A/ICNote/live");
+  const result = deleteNoteSafely(Notes, target, "Recently Deleted");
 
   assert.deepEqual(result, {
     deleted: true,
     id: "x-coredata://A/ICNote/live",
     name: "Live note",
+    account: target.account,
+    folder: target.folder,
   });
   assert.deepEqual(Notes.deleted, ["x-coredata://A/ICNote/live"]);
 });
@@ -254,7 +236,12 @@ test("delete honors a localized configured trash-folder name", () => {
   const Notes = mockNotesForDelete(fixtures);
 
   assert.throws(
-    () => deleteNoteSafely(Notes, "norsk", "", "Nylig slettet"),
+    () =>
+      deleteNoteSafely(
+        Notes,
+        Notes.target("x-coredata://A/ICNote/norsk"),
+        "Nylig slettet"
+      ),
     /already in Nylig slettet/i
   );
   assert.deepEqual(Notes.deleted, []);

@@ -61,9 +61,15 @@ test("lifecycle: create → search → update → get → delete", { skip: !enab
     };
 
     const marker = "integration-marker-zanzibar";
+    const folders = await call("list_folders", {});
+    const targetFolder = folders.find(
+      (folder: { name: string }) => folder.name === "Notes"
+    ) ?? folders[0];
+    assert.ok(targetFolder?.id, "No writable Notes folder was discovered");
     const created = await call("create_note", {
       title: "apple-notes-mcp integration test",
       body: `${marker} original`,
+      folder_id: targetFolder.id,
     });
     assert.ok(created.id);
 

@@ -10,6 +10,7 @@ export const SERVER_INSTRUCTIONS = [
   "Apple Notes content is accessed locally by this stdio-only server.",
   "Tool results are returned to the connected MCP client and may be sent to its model provider, so they are not guaranteed to remain on this Mac.",
   "Write tools are available only with APPLE_NOTES_MODE=read-write and every mutation requires explicit user approval in the MCP client.",
+  "Mutations require full stable folder or note IDs from discovery; names and shortened note IDs are read-only selectors and ambiguity is rejected.",
   "delete_note asks Notes to move an ordinary note to Recently Deleted, but recovery is not guaranteed for every account or shared-note case.",
   "Detected rich-content replacement is rejected unless allow_rich_content_loss=true, and deleting a note already in Recently Deleted is rejected.",
   "Locked notes may be rejected by Notes, while shared-note writes are not yet independently gated; do not mutate either without confirming the risk.",

@@ -1,10 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { runJxa } from "../jxa.js";
-import { JXA_RESOLVE_NOTE } from "../snippets.js";
+import { JXA_IDENTITY_HELPERS } from "../snippets.js";
 import { ok, fail, factorIds, truncateBody } from "../helpers.js";
-import { plaintextCache, staleIds, getFolderMap } from "../cache.js";
-import type { NoteSummary, NoteDetail } from "../types.js";
+import { plaintextCache, staleIds } from "../cache.js";
+import type { EntityIdentity, NoteLocation, NoteSummary, NoteDetail } from "../types.js";
 
 // The special "Recently Deleted" folder is matched by name, which is localized
 // by macOS. Override it for non-English locales via APPLE_NOTES_TRASH_FOLDER
@@ -15,20 +15,23 @@ export function registerReadTools(server: McpServer): void {
   server.registerTool(
     "list_folders",
     {
-      description: "List all folders in Apple Notes with their note counts.",
+      description:
+        "List all Apple Notes folders with stable folder/account ids and note counts. Duplicate names remain separate entries.",
       inputSchema: {},
     },
     async () => {
       try {
-        const folders = await runJxa<{ name: string; count: number }[]>(`
+        const folders = await runJxa<
+          { id: string; name: string; account: EntityIdentity; count: number }[]
+        >(`${JXA_IDENTITY_HELPERS}
           function run() {
             const Notes = Application("Notes");
-            const names = Notes.folders.name();
-            const result = [];
-            for (let i = 0; i < names.length; i++) {
-              result.push({ name: names[i], count: Notes.folders[i].notes.length });
-            }
-            return JSON.stringify(result);
+            return JSON.stringify(folderCatalog(Notes, true).map(folder => ({
+              id: folder.id,
+              name: folder.name,
+              account: folder.account,
+              count: folder.count,
+            })));
           }
         `);
         return ok(folders);
@@ -42,12 +45,16 @@ export function registerReadTools(server: McpServer): void {
     "list_notes",
     {
       description:
-        "List notes in Apple Notes, most recently modified first. Optionally filter by folder name. Returns id, title, folder, and modification date.",
+        "List notes with stable account/folder identity, most recently modified first. Filter by folder_id, or by a unique folder name for discovery.",
       inputSchema: {
+        folder_id: z
+          .string()
+          .optional()
+          .describe("Full stable folder id from list_folders (preferred)"),
         folder: z
           .string()
           .optional()
-          .describe("Folder name to list notes from (e.g. 'Notes', 'Work')"),
+          .describe("Exact folder name; rejected when that name exists more than once"),
         limit: z
           .number()
           .int()
@@ -57,7 +64,10 @@ export function registerReadTools(server: McpServer): void {
           .describe("Maximum number of notes to return (default 25)"),
       },
     },
-    async ({ folder, limit }) => {
+    async ({ folder_id, folder, limit }) => {
+      if (folder_id && folder) {
+        return fail(new Error("Provide either 'folder_id' or 'folder', not both."));
+      }
       try {
         // Bulk property fetch — one Apple Event per property, fast even for many
         // notes. deletedIds (Recently Deleted contents) fetched for exclusion when
@@ -67,22 +77,27 @@ export function registerReadTools(server: McpServer): void {
           names: string[];
           modified: string[];
           deletedIds: string[];
+          location: NoteLocation | null;
+          locations: Record<string, NoteLocation> | null;
         }>(
-          `
+          `${JXA_IDENTITY_HELPERS}
           function run(argv) {
-            const folderName = argv[0];
-            const trashName = argv[1];
+            const folderId = argv[0];
+            const folderName = argv[1];
+            const trashName = argv[2];
             const Notes = Application("Notes");
 
             let container = Notes;
+            let selected = null;
             let deletedIds = [];
-            if (folderName !== "") {
-              const matches = Notes.folders.whose({ name: folderName });
-              if (matches.length === 0) throw new Error("Folder not found: " + folderName);
-              container = matches[0];
+            if (folderId !== "" || folderName !== "") {
+              selected = resolveFolderForRead(Notes, folderId, folderName);
+              container = selected.folder;
             } else {
-              const rd = Notes.folders.whose({ name: trashName });
-              deletedIds = rd.length > 0 ? rd[0].notes.id() : [];
+              const trashFolders = Notes.folders.whose({ name: trashName });
+              for (let i = 0; i < trashFolders.length; i++) {
+                deletedIds = deletedIds.concat(trashFolders[i].notes.id());
+              }
             }
 
             return JSON.stringify({
@@ -90,24 +105,34 @@ export function registerReadTools(server: McpServer): void {
               names: container.notes.name(),
               modified: container.notes.modificationDate().map(d => d.toISOString().slice(0, 19) + "Z"),
               deletedIds: deletedIds,
+              location: selected === null ? null : {
+                account: selected.account,
+                folder: { id: selected.id, name: selected.name },
+              },
+              locations: selected === null ? noteIdentityMap(Notes) : null,
             });
           }
         `,
-          [folder ?? "", TRASH_FOLDER]
+          [folder_id ?? "", folder ?? "", TRASH_FOLDER]
         );
 
         const deleted = new Set(meta.deletedIds);
         const liveIds = meta.ids.filter((id) => !deleted.has(id));
-        const map = folder ? null : await getFolderMap(liveIds);
-        const { idPrefix, shorten } = factorIds(meta.ids);
+        const map = meta.locations;
+        const { idPrefix, shorten } = factorIds(liveIds);
 
         const all: NoteSummary[] = [];
         meta.ids.forEach((id, i) => {
           if (deleted.has(id)) return;
+          const location = meta.location ?? map?.[id];
+          if (!location) {
+            throw new Error(`Stable account/folder identity unavailable for note: ${id}`);
+          }
           all.push({
             id: shorten(id),
             name: meta.names[i],
-            folder: folder ?? (map?.[id] || undefined),
+            account: location.account,
+            folder: location.folder,
             modified: meta.modified[i],
           });
         });
@@ -123,7 +148,7 @@ export function registerReadTools(server: McpServer): void {
     "search_notes",
     {
       description:
-        "Search Apple Notes by text in the note title or body. Returns matching notes (id, title, folder, modification date).",
+        "Search note titles/bodies and return matching summaries with stable account/folder identity.",
       inputSchema: {
         query: z.string().min(1).describe("Text to search for (case-insensitive)"),
         limit: z
@@ -147,17 +172,23 @@ export function registerReadTools(server: McpServer): void {
           names: string[];
           modified: string[];
           deletedIds: string[];
+          locations: Record<string, NoteLocation>;
         }>(
-          `
+          `${JXA_IDENTITY_HELPERS}
           function run(argv) {
             const trashName = argv[0];
             const Notes = Application("Notes");
-            const rd = Notes.folders.whose({ name: trashName });
+            const trashFolders = Notes.folders.whose({ name: trashName });
+            let deletedIds = [];
+            for (let i = 0; i < trashFolders.length; i++) {
+              deletedIds = deletedIds.concat(trashFolders[i].notes.id());
+            }
             return JSON.stringify({
               ids: Notes.notes.id(),
               names: Notes.notes.name(),
               modified: Notes.notes.modificationDate().map(d => d.toISOString().slice(0, 19) + "Z"),
-              deletedIds: rd.length > 0 ? rd[0].notes.id() : [],
+              deletedIds: deletedIds,
+              locations: noteIdentityMap(Notes),
             });
           }
         `,
@@ -165,8 +196,6 @@ export function registerReadTools(server: McpServer): void {
         );
 
         const deleted = new Set(meta.deletedIds);
-        let foldersDirty = false;
-
         // Refresh the plaintext cache only for notes that are new or changed.
         if (scope === "all") {
           const stale = staleIds(meta.ids, meta.modified, deleted);
@@ -204,7 +233,6 @@ export function registerReadTools(server: McpServer): void {
                 plaintextCache.set(id, { modified: meta.modified[i], plaintext: fetched[id] });
               }
             });
-            foldersDirty = true; // content changed — folder labels may have too
           }
           // Evict notes that no longer exist (or were moved to Recently Deleted).
           const live = new Set(meta.ids.filter((id) => !deleted.has(id)));
@@ -214,8 +242,8 @@ export function registerReadTools(server: McpServer): void {
         // Search in-process; deleted notes excluded.
         const q = query.toLowerCase();
         const liveIds = meta.ids.filter((id) => !deleted.has(id));
-        const map = await getFolderMap(liveIds, foldersDirty);
-        const { idPrefix, shorten } = factorIds(meta.ids);
+        const map = meta.locations;
+        const { idPrefix, shorten } = factorIds(liveIds);
 
         const result: NoteSummary[] = [];
         for (let i = 0; i < meta.ids.length && result.length < limit; i++) {
@@ -226,10 +254,15 @@ export function registerReadTools(server: McpServer): void {
             scope === "all" &&
             (plaintextCache.get(id)?.plaintext ?? "").toLowerCase().includes(q);
           if (inName || inBody) {
+            const location = map[id];
+            if (!location) {
+              throw new Error(`Stable account/folder identity unavailable for note: ${id}`);
+            }
             result.push({
               id: shorten(id),
               name: meta.names[i],
-              folder: map[id] || undefined,
+              account: location.account,
+              folder: location.folder,
               modified: meta.modified[i],
             });
           }
@@ -245,7 +278,7 @@ export function registerReadTools(server: McpServer): void {
     "get_note",
     {
       description:
-        "Read the full content of an Apple Note by its id (preferred, from list_notes/search_notes) or exact title.",
+        "Read one Apple Note by full/uniquely matching short id or exact unique title. Ambiguous selectors return full candidate ids and account/folder identities.",
       inputSchema: {
         id: z
           .string()
@@ -266,15 +299,17 @@ export function registerReadTools(server: McpServer): void {
       }
       try {
         const note = await runJxa<NoteDetail>(
-          `${JXA_RESOLVE_NOTE}
+          `${JXA_IDENTITY_HELPERS}
           function run(argv) {
             const Notes = Application("Notes");
-            const note = resolveNote(Notes, argv[0], argv[1]);
+            const target = resolveNoteForRead(Notes, argv[0], argv[1]);
+            const note = target.note;
 
             return JSON.stringify({
-              id: note.id(),
+              id: target.id,
               name: note.name(),
-              folder: note.container().name(),
+              account: target.account,
+              folder: target.folder,
               created: note.creationDate().toISOString().slice(0, 19) + "Z",
               modified: note.modificationDate().toISOString().slice(0, 19) + "Z",
               plaintext: note.plaintext(),

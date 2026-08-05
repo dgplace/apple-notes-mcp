@@ -15,7 +15,13 @@ interface RpcResponse {
   result?: {
     instructions?: string;
     serverInfo?: { name: string; version: string };
-    tools?: { name: string }[];
+    tools?: {
+      name: string;
+      inputSchema?: {
+        required?: string[];
+        properties?: Record<string, { pattern?: string }>;
+      };
+    }[];
     isError?: boolean;
     content?: { type: string; text: string }[];
   };
@@ -194,7 +200,7 @@ test("explicit read-only startup advertises only the four read tools", async () 
   ]);
 });
 
-test("read-write startup advertises the complete legacy tool surface", async () => {
+test("read-write startup advertises the complete tool surface", async () => {
   assert.deepEqual(await advertisedTools("read-write"), [
     "list_folders",
     "list_notes",
@@ -204,6 +210,64 @@ test("read-write startup advertises the complete legacy tool surface", async () 
     "update_note",
     "delete_note",
   ]);
+});
+
+test("mutation schemas require stable full folder/note ids and expose no name selector", async () => {
+  const server = startServer("read-write");
+  try {
+    await initialize(server);
+    const response = await server.request("tools/list", {});
+    const tools = response.result?.tools ?? [];
+    const create = tools.find((tool) => tool.name === "create_note")?.inputSchema;
+    const update = tools.find((tool) => tool.name === "update_note")?.inputSchema;
+    const remove = tools.find((tool) => tool.name === "delete_note")?.inputSchema;
+
+    assert.ok(create?.required?.includes("folder_id"));
+    assert.deepEqual(Object.keys(create?.properties ?? {}).sort(), ["body", "folder_id", "title"]);
+    assert.match(create?.properties?.folder_id?.pattern ?? "", /ICFolder/);
+
+    for (const schema of [update, remove]) {
+      assert.ok(schema?.required?.includes("id"));
+      assert.ok(!("title" in (schema?.properties ?? {})));
+      assert.match(schema?.properties?.id?.pattern ?? "", /ICNote/);
+    }
+  } finally {
+    await server.stop();
+  }
+});
+
+test("invalid mutation identifiers are rejected by schema before JXA can run", async () => {
+  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-identity-no-jxa-"));
+  const marker = join(fakeBin, "jxa-launched");
+  const fakeOsascript = join(fakeBin, "osascript");
+  await writeFile(
+    fakeOsascript,
+    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nexit 99\n'
+  );
+  await chmod(fakeOsascript, 0o755);
+
+  const server = startServer("read-write", {
+    PATH: fakeBin,
+    APPLE_NOTES_JXA_MARKER: marker,
+  });
+  try {
+    await initialize(server);
+    const calls = [
+      { name: "create_note", arguments: { title: "x", body: "", folder: "Work" } },
+      { name: "update_note", arguments: { id: "p1", body: "x" } },
+      { name: "delete_note", arguments: { id: "p1" } },
+    ];
+    for (const call of calls) {
+      const response = await server.request("tools/call", call);
+      assert.equal(response.error, undefined);
+      assert.equal(response.result?.isError, true);
+      assert.match(response.result?.content?.[0]?.text ?? "", /invalid|folder_id|full/i);
+    }
+    await assert.rejects(access(marker), { code: "ENOENT" });
+  } finally {
+    await server.stop();
+    await rm(fakeBin, { recursive: true, force: true });
+  }
 });
 
 test("initialize returns version 2.0.0 and the security boundary instructions", async () => {

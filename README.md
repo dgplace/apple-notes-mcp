@@ -164,13 +164,44 @@ write mode alone does not express user intent for an individual operation.
 
 | Tool | Mode | Description |
 |------|------|-------------|
-| `list_folders` | read-only, read-write | List all folders with note counts |
-| `list_notes` | read-only, read-write | List notes (most recently modified first), optionally filtered by folder. Params: `folder?`, `limit` (1–200, default 25) |
-| `search_notes` | read-only, read-write | Case-insensitive search in note titles and bodies. Params: `query`, `limit` (1–100, default 20), `scope` (`all`\|`title`, default all) |
-| `get_note` | read-only, read-write | Read a note's content by `id` (short or full, preferred) or exact `title`. Param `max_chars` (default 10000) truncates long bodies |
-| `create_note` | read-write | Create a note. Params: `title`, `body` (plain text or HTML), `folder?` |
-| `update_note` | read-write | Replace or append to a note's body, optionally rename. Params: `id`/`title`, `body`, `mode` (`replace`\|`append`, default replace), `new_title?`, `allow_rich_content_loss` (default false) |
-| `delete_note` | read-write | Ask Notes to move an ordinary note to Recently Deleted. Params: `id`/`title` |
+| `list_folders` | read-only, read-write | List every folder as a distinct stable `id`/`name`, its stable account `id`/`name`, and note count |
+| `list_notes` | read-only, read-write | List notes (most recently modified first) with stable account/folder identity. Params: `folder_id?` (preferred), unique `folder?` name, `limit` (1–200, default 25) |
+| `search_notes` | read-only, read-write | Case-insensitive search in note titles and bodies with stable account/folder identity. Params: `query`, `limit` (1–100, default 20), `scope` (`all`\|`title`, default all) |
+| `get_note` | read-only, read-write | Read by full or uniquely matching short `id`, or exact unique `title`. Ambiguous selectors return candidate identities. `max_chars` defaults to 10000 |
+| `create_note` | read-write | Create in an explicitly selected folder. Params: `title`, `body` (plain text or HTML), required full `folder_id` from `list_folders` |
+| `update_note` | read-write | Replace or append by required full note `id`; titles/short ids are rejected. Also accepts `body`, `mode`, `new_title?`, `allow_rich_content_loss` |
+| `delete_note` | read-write | Ask Notes to move an ordinary note to Recently Deleted, addressed by required full note `id` only |
+
+### Stable identities
+
+Folder and account names are labels, not mutation targets. Different accounts
+often contain folders with the same name, so `list_folders` keeps those entries
+distinct:
+
+```json
+[
+  {"id":"x-coredata://A/ICFolder/p2","name":"Work","account":{"id":"x-coredata://A/ICAccount/p1","name":"iCloud"},"count":12},
+  {"id":"x-coredata://B/ICFolder/p7","name":"Work","account":{"id":"x-coredata://B/ICAccount/p1","name":"On My Mac"},"count":3}
+]
+```
+
+Pass the selected full folder `id` as `folder_id` to `create_note`. A folder
+name is still accepted by `list_notes` for discovery, but only when it has one
+match; duplicate names return an error listing the full candidate IDs and
+their accounts.
+
+Note summaries and details carry the same identity context:
+
+```json
+{"idPrefix":"x-coredata://A/ICNote/","notes":[{"id":"p42","name":"Plan","account":{"id":"x-coredata://A/ICAccount/p1","name":"iCloud"},"folder":{"id":"x-coredata://A/ICFolder/p2","name":"Work"},"modified":"2026-08-05T01:02:03Z"}]}
+```
+
+`idPrefix` is only a compact display encoding. For a mutation, reconstruct the
+full note ID by concatenating `idPrefix` and the displayed `id` (the example is
+`x-coredata://A/ICNote/p42`). When results span accounts, `idPrefix` is empty
+and each note already carries its full ID. `get_note` may use a short ID only
+when it uniquely matches one note; mutations never accept shortened IDs or
+titles.
 
 ### Example prompts
 
@@ -178,12 +209,14 @@ write mode alone does not express user intent for an individual operation.
 - *"Show my 10 most recent notes"*
 - *"Search my notes for 'tax return'"*
 - *"Read the note titled 'Meeting agenda'"*
-- *"Create a note called 'Groceries' with milk, eggs, bread in the Shopping folder"*
-- *"Add 'butter' to my Groceries note"*
-- *"Delete the note titled 'Old draft'"*
+- *"List my folders, then create a note called 'Groceries' in the Shopping folder I select"*
+- *"Find my Groceries note, then add 'butter' using its full ID"*
+- *"Find Old draft, show me its account and folder, then delete that exact note"*
 
 ### Notes on `create_note`
 
+- Call `list_folders` first and pass the intended entry's full `id` as
+  `folder_id`. There is no default-account or folder-name fallback.
 - Plain-text bodies are HTML-escaped and line breaks are preserved.
 - If the body starts with `<`, it is treated as raw HTML (Notes bodies are HTML). Notes.app sanitizes what it stores, but only pass HTML you trust. Bear in mind the body usually comes from the AI model, so treat it as untrusted: a prompt-injected model could emit arbitrary HTML here. Plain-text bodies are always escaped, so this only applies to bodies you (or the model) deliberately start with `<`.
 - The title is rendered as the note's first line (`<h1>`), which Notes uses as the note name.
@@ -204,7 +237,7 @@ src/
   jxa.ts            runs JXA scripts via osascript (argv-safe)
   snippets.ts       shared JXA code (HTML escaping, note resolution, folder map)
   helpers.ts        result wrappers, id-prefix factoring, body truncation
-  cache.ts          in-process plaintext + folder-map caches
+  cache.ts          in-process plaintext cache for body search
   types.ts          NoteSummary / NoteDetail
   tools/read.ts     list_folders, list_notes, search_notes, get_note
   tools/write.ts    create_note, update_note, delete_note
@@ -250,7 +283,11 @@ printf '%s\n' \
 - `delete_note` refuses notes already in Recently Deleted. For ordinary notes it
   asks Notes to move the note there, but recovery is not guaranteed for every
   account type or shared-note case.
-- Title-based update/delete refuses to act when multiple notes share the title (use `id`).
+- Folder-name and note-title reads reject multiple matches and return compact
+  candidate full IDs with account/folder identities. Update/delete accept only
+  full stable note IDs, and create accepts only a full stable folder ID.
+- Short note IDs are display/read conveniences only. A read must prove the
+  suffix unique; mutations require the reconstructed full `x-coredata` ID.
 - Notes in Recently Deleted are excluded from `list_notes`/`search_notes` (pass `folder: "Recently Deleted"` to list them explicitly). Note: the folder is matched by name (default `Recently Deleted`); on a non-English macOS locale, set `APPLE_NOTES_TRASH_FOLDER` (see [Environment variables](#environment-variables)) so the exclusion applies.
 - Locked notes may be rejected by Notes and shared-note writes are not yet
   independently gated. Do not mutate either without understanding the account
@@ -321,15 +358,16 @@ every call. Both are kept deliberately small:
 - **Compact JSON** — no pretty-printing (~18% smaller).
 - **Factored id prefix** — note ids share a 55-char `x-coredata://UUID/ICNote/`
   prefix; list/search return it once as `idPrefix` with short per-note ids (`p634`).
-  All tools accept either form.
+  Read resolution accepts a uniquely matching short form; mutations require the
+  reconstructed full form.
 - **Bounded responses** — `get_note` caps bodies at `max_chars` (default 10,000
   chars ≈ 2,500 tokens) with a truncation marker telling the model exactly how to
   fetch the rest. A single huge note can never flood the context.
-- **No noise** — empty folder fields omitted, dates without milliseconds, plaintext
-  bodies (never raw HTML, which some servers return at 3–10× the token cost).
+- **No noise** — stable identity is represented by compact `id`/`name` objects,
+  dates omit milliseconds, and bodies are plaintext rather than raw HTML.
 
-Measured: `list_notes` of 25 notes ≈ 2,150 chars (~540 tokens) — versus 925 chars for
-just 5 notes before these optimizations (~47% reduction at equal content).
+Stable account/folder identity adds necessary metadata to each note summary; the
+factored note-ID prefix avoids compounding that cost with repeated full note IDs.
 
 ## License
 

@@ -90,11 +90,11 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** Reads and writes always target the account and folder selected by the user, even when names are duplicated. Today folders resolve via `whose({name})[0]` (`src/tools/read.ts:81`, `src/tools/write.ts:37`) and `create_note` falls back to `Notes.defaultAccount` (`src/tools/write.ts:34`).
 
-- [ ] Return stable account IDs and folder IDs from discovery tools.
-- [ ] Include account identity in note summaries and note details.
-- [ ] Require IDs for mutations; allow names only for discovery.
-- [ ] Reject ambiguous folder and note names with candidate IDs instead of choosing the first match.
-- [ ] Preserve full note IDs in mutation requests; treat shortened IDs as display-only unless uniqueness is proven — `resolveNote` currently accepts the first id whose suffix matches (`src/snippets.ts:26`).
+- [x] Return stable account IDs and folder IDs from discovery tools.
+- [x] Include account identity in note summaries and note details.
+- [x] Require IDs for mutations; allow names only for discovery.
+- [x] Reject ambiguous folder and note names with candidate IDs instead of choosing the first match.
+- [x] Preserve full note IDs in mutation requests; treat shortened IDs as display-only unless uniqueness is proven — `resolveNote` currently accepts the first id whose suffix matches (`src/snippets.ts:26`).
 
 **Acceptance criteria:**
 
