@@ -27,8 +27,8 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 **What:** Changes are actually checked before merge. Every acceptance criterion below phrased as "tests verify…" is currently vacuous: `.github/workflows/ci.yml` triggers on `main`, the repository's default branch is `master`, so CI has never run on a pull request.
 
 - [x] Change the `push` and `pull_request` triggers to `master`.
-- [ ] Mark the job required for merge.
-- [ ] Confirm a test pull request reports a status check.
+- [x] Mark the job required for merge.
+- [x] Confirm a test pull request reports a status check.
 
 **Acceptance criteria:**
 
