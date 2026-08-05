@@ -126,6 +126,15 @@ claude mcp add apple-notes -- node /absolute/path/to/apple-notes-mcp/dist/index.
 | `APPLE_NOTES_MODE` | `read-only` | Server-enforced capability mode. The only accepted values are exactly `read-only` and `read-write`; any other present value prevents startup. |
 | `APPLE_NOTES_TRASH_FOLDER_IDS` | unset | Comma-separated full stable `ICFolder` IDs, with exactly one Recently Deleted folder for every currently discovered Notes account. Until the mapping is complete, only `list_folders` is usable. |
 | `APPLE_NOTES_ALLOW_SHARED_WRITES` | `false` | Separate shared-write capability gate. Accepts exactly `true` or `false`; a shared mutation also needs `allow_shared_note=true` on that call. Any other present value prevents startup. |
+| `APPLE_NOTES_ALLOW_RAW_HTML` | `false` | Separate raw-HTML capability gate. Accepts exactly `true` or `false`; HTML content also needs `content_format=html` on that call and is restricted to the documented attribute-free subset. Any other present value prevents startup. |
+
+Keep raw HTML disabled unless a client genuinely needs it. To enable only the
+server capability, add the exact value to that server's environment; calls
+still default to escaped plain text:
+
+```text
+APPLE_NOTES_ALLOW_RAW_HTML=true
+```
 
 Set it in your MCP client config, e.g. for Claude Desktop:
 
@@ -175,8 +184,8 @@ write mode alone does not express user intent for an individual operation.
 | `list_notes` | read-only, read-write | List metadata newest first. Params: `folder_id?`, unique `folder?`, `limit` (hard-capped at 100), `offset`; returns continuation metadata. |
 | `search_notes` | read-only, read-write | Notes-side case-insensitive title/body matching that returns metadata only; plaintext is never returned by search. Query length is capped at 256. Params: `query`, `limit`, `offset`, `scope`. |
 | `get_note` | read-only, read-write | Read one selected live note. `max_chars` defaults to 10000 and clamps at 20000; use `offset`/`page.next_offset` to continue. |
-| `create_note` | read-write | Create in an explicitly selected full `folder_id`; supports `dry_run` and verifies real writes. |
-| `update_note` | read-write | Conflict-safe replace or append by full `id` plus required `expected_revision`; supports `dry_run`, `new_title?`, and the rich/shared per-call gates. |
+| `create_note` | read-write | Create in an explicitly selected full `folder_id`; `content_format` defaults to `plain`; supports `dry_run` and verifies real writes. |
+| `update_note` | read-write | Conflict-safe replace or append by full `id` plus required `expected_revision`; `content_format` defaults to `plain`; supports `dry_run`, `new_title?`, and the rich/shared per-call gates. |
 | `move_note` | read-write | Conflict-safe move by full note `id`, full destination `folder_id`, and required `expected_revision`; supports `dry_run`. |
 | `delete_note` | read-write | Ask Notes to move an ordinary note to the configured stable Recently Deleted folder. Requires full `id` and `expected_revision`, supports `dry_run`, and verifies the destination. |
 
@@ -259,12 +268,23 @@ Notes does not advance the note's modification date.
 - *"Find my Groceries note, then add 'butter' using its full ID"*
 - *"Find Old draft, show me its account and folder, then delete that exact note"*
 
-### Notes on `create_note`
+### Notes on written content
 
 - Call `list_folders` first and pass the intended entry's full `id` as
   `folder_id`. There is no default-account or folder-name fallback.
-- Plain-text bodies are HTML-escaped and line breaks are preserved.
-- If the body starts with `<`, it is treated as raw HTML (Notes bodies are HTML). Notes.app sanitizes what it stores, but only pass HTML you trust. Bear in mind the body usually comes from the AI model, so treat it as untrusted: a prompt-injected model could emit arbitrary HTML here. Plain-text bodies are always escaped, so this only applies to bodies you (or the model) deliberately start with `<`.
+- `content_format` defaults to `plain`. Plain bodies are always HTML-escaped and
+  line breaks are preserved; text beginning with `<` remains literal text.
+- Raw HTML requires both `APPLE_NOTES_ALLOW_RAW_HTML=true` at startup and
+  `content_format=html` on the individual create, replace, or append call.
+  Enabling the server flag does not change the per-call default.
+- Accepted HTML is parsed and canonicalized to an attribute-free subset:
+  `div`, `p`, `blockquote`, `pre`, `ul`, `ol`, `li`, `strong`, `em`, `b`, `i`,
+  `u`, `s`, `code`, and `br`. Tags must be balanced and validly nested. Scripts,
+  styles, comments, declarations, headings, tables, checklists, media, links,
+  embedded objects, every attribute/event handler/URL, unsupported entities,
+  and malformed markup are rejected before Notes automation runs.
+- Append adds only the escaped or sanitized fragment to the exact existing
+  Notes HTML. It does not reconstruct the title or existing rich content.
 - The title is rendered as the note's first line (`<h1>`), which Notes uses as the note name.
 
 ## Development
@@ -325,6 +345,8 @@ printf '%s\n' \
 - User input is passed to JXA via `argv`, never interpolated into the script — no script injection.
 - Scripts run through `execFile` (no shell), with a 120s timeout and bounded output buffer.
 - Note titles and plain-text bodies are HTML-escaped before being written to Notes.
+- There is no HTML auto-detection. Raw HTML is disabled by default, requires two
+  explicit gates, and passes through a strict balanced no-attribute allowlist.
 - Replacing detected attachment, drawing, table, or checklist content is rejected
   unless `allow_rich_content_loss=true` is supplied for that individual call.
 - Every update/move/delete requires the last read `revision`; stale revisions

@@ -5,6 +5,7 @@ import {
   JXA_HTML_HELPERS,
   JXA_UPDATE_NOTE,
 } from "../src/snippets.js";
+import { prepareContent } from "../src/content.js";
 
 const { richContentKinds, updateNoteContent } = new Function(
   `${JXA_HTML_HELPERS}\n${JXA_UPDATE_NOTE}; return { richContentKinds, updateNoteContent };`
@@ -70,7 +71,7 @@ for (const fixture of FIXTURES) {
     const { note } = mockNote(fixture);
 
     assert.throws(
-      () => updateNoteContent(note, "replacement", "replace", "", false),
+      () => updateNoteContent(note, "<div>replacement</div>", "replace", "", false),
       new RegExp(`rich content.*${fixture.kind}.*allow_rich_content_loss`, "i")
     );
     assert.equal(typeof note.body, "function", "rejection must happen before mutation");
@@ -79,7 +80,7 @@ for (const fixture of FIXTURES) {
   test(`replace permits intentional ${fixture.kind} loss with per-call override`, () => {
     const { note } = mockNote(fixture);
 
-    updateNoteContent(note, "replacement", "replace", "", true);
+    updateNoteContent(note, "<div>replacement</div>", "replace", "", true);
 
     assert.equal(
       note.body,
@@ -90,7 +91,7 @@ for (const fixture of FIXTURES) {
   test(`append preserves ${fixture.kind} HTML and the title`, () => {
     const { note, nameCalls } = mockNote(fixture);
 
-    updateNoteContent(note, "added", "append", "", false);
+    updateNoteContent(note, "<div>added</div>", "append", "", false);
 
     assert.equal(note.body, fixture.html + "<div>added</div>");
     assert.equal(nameCalls(), 0, "append must not reconstruct or query the title");
@@ -104,13 +105,35 @@ test("replace preserves the existing title when new_title is absent", () => {
   };
   const { note, nameCalls } = mockNote(fixture, "Original & exact");
 
-  updateNoteContent(note, "new body", "replace", "", false);
+  updateNoteContent(note, "<div>new body</div>", "replace", "", false);
 
   assert.equal(
     note.body,
     "<div><h1>Original &amp; exact</h1></div><div>new body</div>"
   );
   assert.equal(nameCalls(), 1);
+});
+
+test("raw HTML append adds only its sanitized fragment to exact existing HTML", () => {
+  const fixture: Fixture = {
+    kind: "attachment",
+    html: '<div><h1>Exact title</h1></div><object data-internal="opaque"></object>',
+    attachmentNames: ["report.pdf"],
+  };
+  const { note, nameCalls } = mockNote(fixture, "Exact title");
+  const fragment = prepareContent(
+    "<P>trusted &amp; <STRONG>new</STRONG><BR /></P>",
+    "html",
+    true
+  ).html;
+
+  updateNoteContent(note, fragment, "append", "", false);
+
+  assert.equal(
+    note.body,
+    fixture.html + "<p>trusted &amp; <strong>new</strong><br></p>"
+  );
+  assert.equal(nameCalls(), 0);
 });
 
 test("rich-content detection combines all present kinds", () => {

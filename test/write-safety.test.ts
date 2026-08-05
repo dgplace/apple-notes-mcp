@@ -50,7 +50,7 @@ function notesFor(note: object, location = LOCATION) {
 test("stale expected revision conflicts before an update can mutate", () => {
   const fixture = noteFixture();
   const Notes = notesFor(fixture.note);
-  const plan = helpers.planNoteUpdate(fixture.note, "new", "replace", "", false);
+  const plan = helpers.planNoteUpdate(fixture.note, "<div>new</div>", "replace", "", false);
   assert.throws(
     () => helpers.assertExpectedRevision(Notes, fixture.note, NOTE_ID, "r2|stale|revision", CONTEXT),
     (error: any) => error.appleNotesSafeCode === "CONFLICT"
@@ -77,7 +77,7 @@ test("matching revision permits the planned append without rebuilding existing H
     expectedToken,
     CONTEXT
   );
-  const plan = helpers.planNoteUpdate(fixture.note, "added", "append", "", false);
+  const plan = helpers.planNoteUpdate(fixture.note, "<div>added</div>", "append", "", false);
   helpers.applyNoteUpdate(fixture.note, plan);
   assert.match(current.revision, /\.456Z/);
   assert.equal(current.location.folder.id, LOCATION.folder.id);

@@ -31,15 +31,6 @@ export const JXA_SAFE_ERRORS = `
 export const JXA_HTML_HELPERS = `
   const escapeHtml = (s) =>
     s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  // Notes bodies are HTML. If body doesn't look like HTML, escape and
-  // convert line breaks so plain text renders correctly.
-  const toHtml = (body) =>
-    /^\\s*</.test(body)
-      ? body
-      : body
-          .split("\\n")
-          .map(line => "<div>" + (escapeHtml(line) || "<br>") + "</div>")
-          .join("");
 `;
 
 // Rich-content inspection for one explicitly selected note. Read summaries do
@@ -114,11 +105,11 @@ export const JXA_UPDATE_NOTE = `
     return error;
   }
 
-  function planNoteUpdate(note, body, mode, newTitle, allowRichContentLoss) {
+  function planNoteUpdate(note, bodyHtml, mode, newTitle, allowRichContentLoss) {
     const existingBody = note.body();
 
     if (mode === "append") {
-      const nextBody = existingBody + toHtml(body);
+      const nextBody = existingBody + bodyHtml;
       return {
         existingBody: existingBody,
         nextBody: nextBody,
@@ -140,7 +131,7 @@ export const JXA_UPDATE_NOTE = `
     const heading = newTitle !== "" ? newTitle : note.name();
     return {
       existingBody: existingBody,
-      nextBody: "<div><h1>" + escapeHtml(heading) + "</h1></div>" + toHtml(body),
+      nextBody: "<div><h1>" + escapeHtml(heading) + "</h1></div>" + bodyHtml,
       projectedTitle: heading,
       richKinds: kinds,
     };
@@ -150,8 +141,8 @@ export const JXA_UPDATE_NOTE = `
     note.body = plan.nextBody;
   }
 
-  function updateNoteContent(note, body, mode, newTitle, allowRichContentLoss) {
-    applyNoteUpdate(note, planNoteUpdate(note, body, mode, newTitle, allowRichContentLoss));
+  function updateNoteContent(note, bodyHtml, mode, newTitle, allowRichContentLoss) {
+    applyNoteUpdate(note, planNoteUpdate(note, bodyHtml, mode, newTitle, allowRichContentLoss));
   }
 `;
 

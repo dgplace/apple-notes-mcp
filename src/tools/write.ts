@@ -12,6 +12,10 @@ import { JXA_REVISION } from "../revision.js";
 import { ok, fail } from "../helpers.js";
 import { parseTrashFolderIds, requireTrashFolderIds } from "../read-policy.js";
 import type { WritePolicy } from "../write-policy.js";
+import {
+  CONTENT_LIMITS,
+  prepareContent,
+} from "../content.js";
 
 const fullFolderId = z
   .string()
@@ -66,10 +70,13 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
     "create_note",
     {
       description:
-        "Create in one full stable folder id. Supports dry-run; real writes are read back and verified.",
+        "Create in one full stable folder id. Content defaults to escaped plain text; raw HTML requires two explicit gates.",
       inputSchema: {
         title: z.string().min(1).describe("Note title"),
-        body: z.string().default("").describe("Note body — plain text or HTML"),
+        body: z.string().max(CONTENT_LIMITS.maxInputChars).default("").describe("Note body"),
+        content_format: z.enum(["plain", "html"]).default("plain").describe(
+          "plain always escapes markup; html also requires APPLE_NOTES_ALLOW_RAW_HTML=true"
+        ),
         folder_id: fullFolderId.describe("Full stable folder id from list_folders"),
         dry_run: z.boolean().default(false),
         allow_shared_note: z.boolean().default(false).describe(
@@ -77,8 +84,9 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
         ),
       },
     },
-    async ({ title, body, folder_id, dry_run, allow_shared_note }) => {
+    async ({ title, body, content_format, folder_id, dry_run, allow_shared_note }) => {
       try {
+        const content = prepareContent(body, content_format, policy.allowRawHtml);
         requireTrashFolderIds(trashFolderIds);
         const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
           function run(argv) {
@@ -99,14 +107,20 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
                 serverAllowsShared,
                 callAllowsShared
               );
-              const html = "<div><h1>" + escapeHtml(argv[0]) + "</h1></div>" + toHtml(argv[1]);
+              const html = "<div><h1>" + escapeHtml(argv[0]) + "</h1></div>" + argv[1];
 
               const preview = {
                   dry_run: true,
                   preview: {
                     operation: "create",
                     target: { account: target.account, folder: { id: target.id, name: target.name } },
-                    projected: { title: argv[0], body_input_chars: argv[1].length, body_html_chars: html.length },
+                    projected: {
+                      title: argv[0],
+                      content_format: argv[7],
+                      body_input_chars: Number(argv[8]),
+                      body_html_fragment_chars: argv[1].length,
+                      body_html_chars: html.length,
+                    },
                     loss_flags: { rich_content_loss: false, shared: shared },
                   },
                 };
@@ -128,12 +142,14 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
             });
           }`, [
           title,
-          body,
+          content.html,
           folder_id,
           JSON.stringify(trashFolderIds),
           String(policy.allowSharedWrites),
           String(allow_shared_note),
           String(dry_run),
+          content.format,
+          String(content.inputChars),
         ]);
         return ok(result);
       } catch (error) {
@@ -146,11 +162,14 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
     "update_note",
     {
       description:
-        "Conflict-safe replace or append by full note id. Requires the latest revision and verifies every real write.",
+        "Conflict-safe replace or append by full note id. Content defaults to escaped plain text; raw HTML requires two explicit gates.",
       inputSchema: {
         id: fullNoteId,
         expected_revision: expectedRevision,
-        body: z.string().min(1).describe("Content to write — plain text or HTML"),
+        body: z.string().min(1).max(CONTENT_LIMITS.maxInputChars).describe("Content to write"),
+        content_format: z.enum(["plain", "html"]).default("plain").describe(
+          "plain always escapes markup; html also requires APPLE_NOTES_ALLOW_RAW_HTML=true"
+        ),
         mode: z.enum(["replace", "append"]).default("replace"),
         new_title: z.string().optional().describe("Rename the note (replace mode only)"),
         allow_rich_content_loss: z.boolean().default(false),
@@ -162,6 +181,7 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
       id,
       expected_revision,
       body,
+      content_format,
       mode,
       new_title,
       allow_rich_content_loss,
@@ -169,6 +189,7 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
       dry_run,
     }) => {
       try {
+        const content = prepareContent(body, content_format, policy.allowRawHtml);
         requireTrashFolderIds(trashFolderIds);
         const result = await runJxa<VerifiedWriteResult | object>(`${scriptPreamble}
           ${JXA_UPDATE_NOTE}
@@ -196,7 +217,9 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
                     current_revision: current.revision,
                     projected: {
                       title: projectedTitle,
-                      body_input_chars: argv[2].length,
+                      content_format: argv[10],
+                      body_input_chars: Number(argv[11]),
+                      body_html_fragment_chars: argv[2].length,
                       body_html_chars_before: plan.existingBody.length,
                       body_html_chars_after: plan.nextBody.length,
                       body_html_chars_change: plan.nextBody.length - plan.existingBody.length,
@@ -230,7 +253,7 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
           }`, [
           id,
           expected_revision,
-          body,
+          content.html,
           mode,
           new_title ?? "",
           String(allow_rich_content_loss),
@@ -238,6 +261,8 @@ export function registerWriteTools(server: McpServer, policy: WritePolicy): void
           String(policy.allowSharedWrites),
           String(allow_shared_note),
           String(dry_run),
+          content.format,
+          String(content.inputChars),
         ]);
         return ok(result);
       } catch (error) {

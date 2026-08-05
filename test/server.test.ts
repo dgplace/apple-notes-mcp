@@ -1,14 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   parseAppleNotesMode,
   SERVER_INSTRUCTIONS,
 } from "../src/server.js";
-import { parseAllowSharedWrites } from "../src/write-policy.js";
+import {
+  parseAllowRawHtml,
+  parseAllowSharedWrites,
+} from "../src/write-policy.js";
 
 interface RpcResponse {
   jsonrpc: "2.0";
@@ -20,7 +23,7 @@ interface RpcResponse {
       name: string;
       inputSchema?: {
         required?: string[];
-        properties?: Record<string, { pattern?: string }>;
+        properties?: Record<string, { pattern?: string; default?: unknown; enum?: unknown[] }>;
       };
     }[];
     isError?: boolean;
@@ -233,9 +236,11 @@ test("mutation schemas require stable full folder/note ids and expose no name se
 
     assert.ok(create?.required?.includes("folder_id"));
     assert.deepEqual(Object.keys(create?.properties ?? {}).sort(), [
-      "allow_shared_note", "body", "dry_run", "folder_id", "title"
+      "allow_shared_note", "body", "content_format", "dry_run", "folder_id", "title"
     ]);
     assert.match(create?.properties?.folder_id?.pattern ?? "", /ICFolder/);
+    assert.equal(create?.properties?.content_format?.default, "plain");
+    assert.deepEqual(create?.properties?.content_format?.enum, ["plain", "html"]);
 
     for (const schema of [update, move, remove]) {
       assert.ok(schema?.required?.includes("id"));
@@ -244,6 +249,8 @@ test("mutation schemas require stable full folder/note ids and expose no name se
       assert.match(schema?.properties?.id?.pattern ?? "", /ICNote/);
     }
     assert.ok(move?.required?.includes("folder_id"));
+    assert.equal(update?.properties?.content_format?.default, "plain");
+    assert.deepEqual(update?.properties?.content_format?.enum, ["plain", "html"]);
   } finally {
     await server.stop();
   }
@@ -327,6 +334,7 @@ test("initialize returns version 2.0.0 and the security boundary instructions", 
     assert.match(response.result?.instructions ?? "", /locked notes/i);
     assert.match(response.result?.instructions ?? "", /shared-note writes/i);
     assert.match(response.result?.instructions ?? "", /rich-content replacement/i);
+    assert.match(response.result?.instructions ?? "", /raw html/i);
   } finally {
     await server.stop();
   }
@@ -338,6 +346,122 @@ test("shared-write capability parser is exact and fails closed", () => {
   assert.equal(parseAllowSharedWrites("true"), true);
   for (const value of ["", "TRUE", " true", "1"]) {
     assert.throws(() => parseAllowSharedWrites(value), /Invalid APPLE_NOTES_ALLOW_SHARED_WRITES/);
+  }
+});
+
+test("raw-HTML capability parser is exact and fails closed", () => {
+  assert.equal(parseAllowRawHtml(undefined), false);
+  assert.equal(parseAllowRawHtml("false"), false);
+  assert.equal(parseAllowRawHtml("true"), true);
+  for (const value of ["", "TRUE", " true", "true ", "1"]) {
+    assert.throws(() => parseAllowRawHtml(value), /Invalid APPLE_NOTES_ALLOW_RAW_HTML/);
+  }
+});
+
+test("invalid raw-HTML configuration exits before startup", async () => {
+  const server = startServer("read-write", { APPLE_NOTES_ALLOW_RAW_HTML: "TRUE" });
+  const { code } = await server.exited;
+  assert.notEqual(code, 0);
+  assert.match(server.stderr(), /Invalid APPLE_NOTES_ALLOW_RAW_HTML "TRUE"/);
+  assert.doesNotMatch(server.stderr(), /server running on stdio/);
+});
+
+test("raw HTML calls fail before JXA unless the startup capability is enabled", async () => {
+  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-html-no-jxa-"));
+  const marker = join(fakeBin, "jxa-launched");
+  const fakeOsascript = join(fakeBin, "osascript");
+  await writeFile(
+    fakeOsascript,
+    '#!/bin/sh\n/usr/bin/touch "$APPLE_NOTES_JXA_MARKER"\nprintf \'{}\'\n'
+  );
+  await chmod(fakeOsascript, 0o755);
+  const server = startServer("read-write", {
+    PATH: fakeBin,
+    APPLE_NOTES_JXA_MARKER: marker,
+    APPLE_NOTES_TRASH_FOLDER_IDS: "x-coredata://A/ICFolder/trash",
+    APPLE_NOTES_ALLOW_RAW_HTML: "false",
+  });
+  try {
+    await initialize(server);
+    for (const call of [
+      {
+        name: "create_note",
+        arguments: {
+          title: "x",
+          body: "<p>raw</p>",
+          content_format: "html",
+          folder_id: "x-coredata://A/ICFolder/work",
+        },
+      },
+      {
+        name: "update_note",
+        arguments: {
+          id: "x-coredata://A/ICNote/p1",
+          expected_revision: "r2|stale",
+          body: "<p>raw</p>",
+          content_format: "html",
+        },
+      },
+    ]) {
+      const response = await server.request("tools/call", call);
+      assert.equal(response.result?.isError, true);
+      assert.match(response.result?.content?.[0]?.text ?? "", /RAW_HTML_DISABLED/);
+    }
+    await assert.rejects(access(marker), { code: "ENOENT" });
+  } finally {
+    await server.stop();
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
+test("create passes only escaped or sanitized projections to JXA", async () => {
+  const fakeBin = await mkdtemp(join(tmpdir(), "apple-notes-html-projection-"));
+  const marker = join(fakeBin, "projected-html");
+  const fakeOsascript = join(fakeBin, "osascript");
+  await writeFile(
+    fakeOsascript,
+    '#!/bin/sh\nprintf \'%s\' "$7" > "$APPLE_NOTES_JXA_MARKER"\nprintf \'{}\'\n'
+  );
+  await chmod(fakeOsascript, 0o755);
+  const server = startServer("read-write", {
+    PATH: fakeBin,
+    APPLE_NOTES_JXA_MARKER: marker,
+    APPLE_NOTES_TRASH_FOLDER_IDS: "x-coredata://A/ICFolder/trash",
+    APPLE_NOTES_ALLOW_RAW_HTML: "true",
+  });
+  try {
+    await initialize(server);
+    const common = {
+      title: "x",
+      folder_id: "x-coredata://A/ICFolder/work",
+      dry_run: true,
+    };
+    const plain = await server.request("tools/call", {
+      name: "create_note",
+      arguments: { ...common, body: "<p>& literal</p>" },
+    });
+    assert.equal(plain.result?.isError, undefined);
+    assert.equal(
+      await readFile(marker, "utf8"),
+      "<div>&lt;p&gt;&amp; literal&lt;/p&gt;</div>"
+    );
+
+    const html = await server.request("tools/call", {
+      name: "create_note",
+      arguments: {
+        ...common,
+        body: "<DIV>safe &amp; <STRONG>x</STRONG><BR /></DIV>",
+        content_format: "html",
+      },
+    });
+    assert.equal(html.result?.isError, undefined);
+    assert.equal(
+      await readFile(marker, "utf8"),
+      "<div>safe &amp; <strong>x</strong><br></div>"
+    );
+  } finally {
+    await server.stop();
+    await rm(fakeBin, { recursive: true, force: true });
   }
 });
 

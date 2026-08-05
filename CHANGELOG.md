@@ -7,6 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Explicit `content_format=plain|html` on create, replace, and append. Plain is
+  the default and always escapes markup. Raw HTML requires the separate exact
+  `APPLE_NOTES_ALLOW_RAW_HTML=true` startup capability.
 - Collision-free revision tokens covering stable note/account/folder identity
   and full-precision modification time. Update,
   append, move, and delete now require `expected_revision`, support `dry_run`,
@@ -16,6 +19,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shared mutation also requires `allow_shared_note=true` on that call.
 
 ### Security
+- Removed body-prefix HTML auto-detection. Enabled raw HTML is parsed into a
+  balanced, attribute-free Notes-compatible subset; scripts, remote resources,
+  event handlers, links, media, tables/checklists, unsupported elements, and
+  malformed markup fail before mutation. Appends preserve the exact existing
+  body and add only the escaped or sanitized fragment.
 - Stale revisions fail with `CONFLICT` immediately before mutation. Locked
   notes, configured-trash targets, and shared writes without both gates fail
   closed.

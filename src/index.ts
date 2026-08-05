@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createAppleNotesServer, parseAppleNotesMode } from "./server.js";
-import { parseAllowSharedWrites } from "./write-policy.js";
+import { parseAllowRawHtml, parseAllowSharedWrites } from "./write-policy.js";
 
 async function main() {
   const mode = parseAppleNotesMode(process.env.APPLE_NOTES_MODE);
   const allowSharedWrites = parseAllowSharedWrites(
     process.env.APPLE_NOTES_ALLOW_SHARED_WRITES
   );
-  const server = createAppleNotesServer(mode, { allowSharedWrites });
+  const allowRawHtml = parseAllowRawHtml(process.env.APPLE_NOTES_ALLOW_RAW_HTML);
+  const server = createAppleNotesServer(mode, { allowSharedWrites, allowRawHtml });
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`apple-notes MCP server running on stdio (${mode})`);

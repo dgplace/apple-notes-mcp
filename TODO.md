@@ -144,11 +144,11 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** Plain text, Markdown-like text, and HTML cannot be confused in ways that corrupt a note. `toHtml` currently treats any body starting with `<` as raw HTML (`src/snippets.ts:11`).
 
-- [ ] Replace HTML auto-detection with an explicit `content_format=plain|html` field.
-- [ ] Default to plain text and escape all markup.
-- [ ] Require a separate configuration flag before accepting raw HTML.
-- [ ] Sanitize allowed HTML to a small Notes-compatible subset before writing.
-- [ ] Preserve the title and existing rich content when an operation does not intend to replace them.
+- [x] Replace HTML auto-detection with an explicit `content_format=plain|html` field.
+- [x] Default to plain text and escape all markup.
+- [x] Require a separate configuration flag before accepting raw HTML.
+- [x] Sanitize allowed HTML to a small Notes-compatible subset before writing.
+- [x] Preserve the title and existing rich content when an operation does not intend to replace them.
 
 **Acceptance criteria:**
 
