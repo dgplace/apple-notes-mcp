@@ -1,13 +1,13 @@
 # apple-notes-mcp
 
-[![npm version](https://img.shields.io/npm/v/@simantaturja/apple-notes-mcp)](https://www.npmjs.com/package/@simantaturja/apple-notes-mcp)
-[![npm downloads](https://img.shields.io/npm/dm/@simantaturja/apple-notes-mcp)](https://www.npmjs.com/package/@simantaturja/apple-notes-mcp)
-[![license](https://img.shields.io/npm/l/@simantaturja/apple-notes-mcp)](./LICENSE)
+[![npm version](https://img.shields.io/npm/v/@dplace/apple-notes-mcp)](https://www.npmjs.com/package/@dplace/apple-notes-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/@dplace/apple-notes-mcp)](https://www.npmjs.com/package/@dplace/apple-notes-mcp)
+[![license](https://img.shields.io/npm/l/@dplace/apple-notes-mcp)](./LICENSE)
 [![platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](https://www.apple.com/macos/)
 
 An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that lets AI assistants like Claude read, search, and create notes in **Apple Notes** on macOS.
 
-Published on npm as [`@simantaturja/apple-notes-mcp`](https://www.npmjs.com/package/@simantaturja/apple-notes-mcp) — no clone or build needed, your MCP client runs the explicitly versioned package via `npx`.
+The npm package is [`@dplace/apple-notes-mcp`](https://www.npmjs.com/package/@dplace/apple-notes-mcp) — no clone or build needed, your MCP client runs the explicitly versioned package via `npx`.
 
 It talks to Notes.app via JXA (JavaScript for Automation) through `osascript` — no private APIs, no database hacks, and it works with iCloud-synced notes.
 
@@ -55,7 +55,7 @@ localized Recently Deleted folder in every discovered account:
 ```toml
 [mcp_servers.apple-notes-discovery]
 command = "npx"
-args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
+args = ["-y", "@dplace/apple-notes-mcp@2.0.0"]
 env = { APPLE_NOTES_MODE = "read-only" }
 enabled_tools = ["list_folders"]
 default_tools_approval_mode = "auto"
@@ -68,7 +68,7 @@ enforces read-only mode and Codex allowlists only the four read tools:
 ```toml
 [mcp_servers.apple-notes-read-only]
 command = "npx"
-args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
+args = ["-y", "@dplace/apple-notes-mcp@2.0.0"]
 env = { APPLE_NOTES_MODE = "read-only", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
 enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note"]
 default_tools_approval_mode = "auto"
@@ -82,7 +82,7 @@ read [Secure write operation](#secure-write-operation):
 ```toml
 [mcp_servers.apple-notes-read-write]
 command = "npx"
-args = ["-y", "@simantaturja/apple-notes-mcp@2.0.0"]
+args = ["-y", "@dplace/apple-notes-mcp@2.0.0"]
 env = { APPLE_NOTES_MODE = "read-write", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
 enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "move_note", "trash_note"]
 default_tools_approval_mode = "auto"
@@ -112,7 +112,7 @@ and [agent approvals and security](https://learn.chatgpt.com/docs/agent-approval
 1. Open **Settings > MCP servers**.
 2. Select **Add server**.
 3. Enter `apple-notes-discovery`, choose **STDIO**, set the command to `npx`, and
-   set its arguments to `-y` and `@simantaturja/apple-notes-mcp@2.0.0`.
+   set its arguments to `-y` and `@dplace/apple-notes-mcp@2.0.0`.
 4. Save the server, then select **Restart**.
 
 Use the same two-phase discovery and read-only configuration shown above. For
@@ -130,7 +130,7 @@ for the current desktop and shared-configuration behavior.
 ### Claude Code
 
 ```bash
-claude mcp add apple-notes -- npx -y @simantaturja/apple-notes-mcp@2.0.0
+claude mcp add apple-notes -- npx -y @dplace/apple-notes-mcp@2.0.0
 ```
 
 With no `APPLE_NOTES_MODE` setting this starts securely in read-only mode.
@@ -144,7 +144,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "apple-notes": {
       "command": "npx",
-      "args": ["-y", "@simantaturja/apple-notes-mcp@2.0.0"],
+      "args": ["-y", "@dplace/apple-notes-mcp@2.0.0"],
       "env": {
         "APPLE_NOTES_MODE": "read-only",
         "APPLE_NOTES_TRASH_FOLDER_IDS": "x-coredata://ACCOUNT/ICFolder/TRASH"
@@ -161,7 +161,7 @@ Restart your client. The first call pulls the package from npm (cached afterward
 For development or to run a local build instead of the published package:
 
 ```bash
-git clone https://github.com/simantaturja/apple-notes-mcp.git
+git clone https://github.com/dgplace/apple-notes-mcp.git
 cd apple-notes-mcp
 npm ci --ignore-scripts  # install exactly package-lock.json; skips prepare
 npm run build            # mandatory: produces dist/ after scripts were disabled
@@ -197,7 +197,7 @@ Set it in your MCP client config, e.g. for Claude Desktop:
   "mcpServers": {
     "apple-notes": {
       "command": "npx",
-      "args": ["-y", "@simantaturja/apple-notes-mcp@2.0.0"],
+      "args": ["-y", "@dplace/apple-notes-mcp@2.0.0"],
       "env": {
         "APPLE_NOTES_MODE": "read-only",
         "APPLE_NOTES_TRASH_FOLDER_IDS": "x-coredata://ACCOUNT/ICFolder/TRASH"

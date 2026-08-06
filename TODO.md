@@ -69,7 +69,7 @@ Deliver a local Apple Notes MCP server that is safe to connect to Codex, ChatGPT
 
 **What:** Users can connect the MCP server without granting it write capability unless they deliberately enable writes.
 
-> **Breaking change.** Defaulting to read-only removes write tools from every existing installation of `@simantaturja/apple-notes-mcp`, which the README currently advertises. Ship as a major version bump with a migration note in `CHANGELOG.md` and README telling existing users which variable restores write access.
+> **Breaking change.** Defaulting to read-only removes write tools from existing 1.x installations. Ship as a major version bump with a migration note in `CHANGELOG.md` and README telling existing users which variable restores write access.
 
 - [x] Add `APPLE_NOTES_MODE=read-only|read-write`, defaulting to `read-only`.
 - [x] In read-only mode, do not advertise create, update, append, move, or delete tools.

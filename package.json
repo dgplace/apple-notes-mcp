@@ -1,17 +1,20 @@
 {
-  "name": "@simantaturja/apple-notes-mcp",
+  "name": "@dplace/apple-notes-mcp",
   "version": "2.0.0",
   "description": "MCP server for Apple Notes (macOS, via JXA/osascript)",
   "type": "module",
   "license": "MIT",
   "author": "Simanta Deb Turja",
-  "homepage": "https://github.com/simantaturja/apple-notes-mcp#readme",
+  "contributors": [
+    "dplace"
+  ],
+  "homepage": "https://github.com/dgplace/apple-notes-mcp#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/simantaturja/apple-notes-mcp.git"
+    "url": "git+https://github.com/dgplace/apple-notes-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/simantaturja/apple-notes-mcp/issues"
+    "url": "https://github.com/dgplace/apple-notes-mcp/issues"
   },
   "keywords": [
     "mcp",
