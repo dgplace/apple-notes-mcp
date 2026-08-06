@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-08-06
+
+### Changed
+- Published under the `@dplace/apple-notes-mcp` npm scope, with package,
+  installation, repository, and security-reporting metadata pointing to the
+  maintained `dgplace/apple-notes-mcp` repository.
+
 ### Added
 - CI formatting, source-and-test type checking, production dependency auditing,
   and an isolated opt-in Notes integration harness scoped to an explicitly

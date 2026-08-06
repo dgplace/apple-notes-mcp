@@ -29,7 +29,7 @@ It talks to Notes.app via JXA (JavaScript for Automation) through `osascript` â€
 ## Setup
 
 No clone, no build. Your MCP client downloads and runs the explicitly versioned
-server package on demand via `npx`. Do not omit the `@2.0.0` version in the
+server package on demand via `npx`. Do not omit the `@2.0.1` version in the
 examples: an unversioned package request can silently select a different release.
 Start read-only, verify what the four read tools expose, and enable writes only
 if you need them.
@@ -55,7 +55,7 @@ localized Recently Deleted folder in every discovered account:
 ```toml
 [mcp_servers.apple-notes-discovery]
 command = "npx"
-args = ["-y", "@dplace/apple-notes-mcp@2.0.0"]
+args = ["-y", "@dplace/apple-notes-mcp@2.0.1"]
 env = { APPLE_NOTES_MODE = "read-only" }
 enabled_tools = ["list_folders"]
 default_tools_approval_mode = "auto"
@@ -68,7 +68,7 @@ enforces read-only mode and Codex allowlists only the four read tools:
 ```toml
 [mcp_servers.apple-notes-read-only]
 command = "npx"
-args = ["-y", "@dplace/apple-notes-mcp@2.0.0"]
+args = ["-y", "@dplace/apple-notes-mcp@2.0.1"]
 env = { APPLE_NOTES_MODE = "read-only", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
 enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note"]
 default_tools_approval_mode = "auto"
@@ -82,7 +82,7 @@ read [Secure write operation](#secure-write-operation):
 ```toml
 [mcp_servers.apple-notes-read-write]
 command = "npx"
-args = ["-y", "@dplace/apple-notes-mcp@2.0.0"]
+args = ["-y", "@dplace/apple-notes-mcp@2.0.1"]
 env = { APPLE_NOTES_MODE = "read-write", APPLE_NOTES_TRASH_FOLDER_IDS = "x-coredata://ACCOUNT/ICFolder/TRASH" }
 enabled_tools = ["list_folders", "list_notes", "search_notes", "get_note", "create_note", "update_note", "move_note", "trash_note"]
 default_tools_approval_mode = "auto"
@@ -112,7 +112,7 @@ and [agent approvals and security](https://learn.chatgpt.com/docs/agent-approval
 1. Open **Settings > MCP servers**.
 2. Select **Add server**.
 3. Enter `apple-notes-discovery`, choose **STDIO**, set the command to `npx`, and
-   set its arguments to `-y` and `@dplace/apple-notes-mcp@2.0.0`.
+   set its arguments to `-y` and `@dplace/apple-notes-mcp@2.0.1`.
 4. Save the server, then select **Restart**.
 
 Use the same two-phase discovery and read-only configuration shown above. For
@@ -130,7 +130,7 @@ for the current desktop and shared-configuration behavior.
 ### Claude Code
 
 ```bash
-claude mcp add apple-notes -- npx -y @dplace/apple-notes-mcp@2.0.0
+claude mcp add apple-notes -- npx -y @dplace/apple-notes-mcp@2.0.1
 ```
 
 With no `APPLE_NOTES_MODE` setting this starts securely in read-only mode.
@@ -144,7 +144,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "apple-notes": {
       "command": "npx",
-      "args": ["-y", "@dplace/apple-notes-mcp@2.0.0"],
+      "args": ["-y", "@dplace/apple-notes-mcp@2.0.1"],
       "env": {
         "APPLE_NOTES_MODE": "read-only",
         "APPLE_NOTES_TRASH_FOLDER_IDS": "x-coredata://ACCOUNT/ICFolder/TRASH"
@@ -197,7 +197,7 @@ Set it in your MCP client config, e.g. for Claude Desktop:
   "mcpServers": {
     "apple-notes": {
       "command": "npx",
-      "args": ["-y", "@dplace/apple-notes-mcp@2.0.0"],
+      "args": ["-y", "@dplace/apple-notes-mcp@2.0.1"],
       "env": {
         "APPLE_NOTES_MODE": "read-only",
         "APPLE_NOTES_TRASH_FOLDER_IDS": "x-coredata://ACCOUNT/ICFolder/TRASH"
