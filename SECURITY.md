@@ -20,13 +20,9 @@ For this 2.x branch on `dgplace/apple-notes-mcp`, use GitHub's live
 GitHub opens a private security advisory visible to the reporter and that
 repository's maintainers.
 
-The package metadata still identifies `simantaturja/apple-notes-mcp` as the
-upstream repository. Its private vulnerability reporting is disabled as checked
-on 2026-08-06, and no verified private maintainer email is present in this
-repository. Report against the repository that actually shipped the affected
-2.x release; for builds from this branch, use the `dgplace` route above. Do not
-substitute a public upstream issue or disclose details publicly because the
-metadata has not yet been reconciled.
+The npm package metadata identifies `dgplace/apple-notes-mcp` as the source
+repository. Report vulnerabilities using the private `dgplace` route above; do
+not substitute a public issue or disclose details publicly.
 
 For a private report, include:
 

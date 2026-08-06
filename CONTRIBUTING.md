@@ -5,7 +5,7 @@ Thanks for your interest in improving apple-notes-mcp.
 ## Development setup
 
 ```bash
-git clone https://github.com/simantaturja/apple-notes-mcp.git
+git clone https://github.com/dgplace/apple-notes-mcp.git
 cd apple-notes-mcp
 npm ci --ignore-scripts  # install the exact lockfile without lifecycle scripts
 npm run build            # required: --ignore-scripts skips prepare/dist generation
